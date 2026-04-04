@@ -1,0 +1,8 @@
+spec_version: 1
+name: devops_pipeline_env
+type: space
+runtime: fastapi
+app: server.app:app
+port: 8000
+description: "CI/CD deployment pipeline environment where an AI agent manages deployments across interdependent microservices. Agent reads logs, edits configs, runs migrations, and makes deployment decisions. Features 3 tasks with qualitative difficulty progression: execute, diagnose, and judgment-call-under-pressure."
+version: "0.1.0"

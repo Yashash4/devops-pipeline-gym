@@ -1,0 +1,35 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devops-pipeline-env"
+version = "0.1.0"
+description = "CI/CD Pipeline Management OpenEnv Environment"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core[core]>=0.2.2",
+    "pydantic>=2.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "openai>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+# Server entry point - enables running via: uv run --project . server
+# or: python -m devops_pipeline_env.server.app
+server = "devops_pipeline_env.server.app:main"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["devops_pipeline_env", "devops_pipeline_env.server"]
+package-dir = { "devops_pipeline_env" = ".", "devops_pipeline_env.server" = "server" }
