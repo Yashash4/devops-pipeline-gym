@@ -277,7 +277,7 @@ class JudgmentCallScenario(Scenario):
             task_name="judgment_call",
             task_description=(
                 "PRODUCTION INCIDENT. api-gateway is severely degraded "
-                "(2000ms latency, 15 errors/sec). A hotfix v2.3.2 is available "
+                "(1500ms latency, 12 errors/sec). A hotfix v2.3.2 is available "
                 "but only smoke-tested — it includes an auth middleware refactor "
                 "that may break web-frontend. Revenue is bleeding at $500/min. "
                 "You have limited time to resolve this. Health degrades every step. "
@@ -308,9 +308,9 @@ class JudgmentCallScenario(Scenario):
                 "log.level": "warn",
             },
             dependencies=[],
-            latency_ms=2000.0,
-            error_rate=15.0,
-            cpu=92.0,
+            latency_ms=1500.0,
+            error_rate=12.0,
+            cpu=85.0,
             memory=78.0,
         )
         engine.services["api-gateway"].target_version = "v2.3.2"

@@ -68,7 +68,7 @@ Diagnose test failures, fix a config error, run a migration, and deploy 3 servic
 - **Challenges**: 3 test failures (2 flaky, 1 deprecated), wrong Redis host in cache-service config, pending migration blocks api-gateway
 
 ### Task 3: "The Judgment Call" (Hard)
-Production incident with api-gateway at 2000ms latency and 15 errors/sec. A partially-tested hotfix is available. Multiple valid resolution paths with different risk/reward tradeoffs. Health degrades every step.
+Production incident with api-gateway at 1500ms latency and 12 errors/sec. A partially-tested hotfix is available. Multiple valid resolution paths with different risk/reward tradeoffs. Health degrades every step.
 - **Max steps**: 12
 - **Dilemma**: Deploy untested hotfix (breaks web-frontend auth) vs rollback (loses web-frontend API endpoint) — every path has cascading consequences
 - **Three valid resolution paths**: deploy hotfix + fix auth config (expert path), rollback (safe), or hotfix only (partial fix). Each scores differently.

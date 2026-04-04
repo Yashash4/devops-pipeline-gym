@@ -51,7 +51,7 @@ class PipelineEnvironment(Environment):
     """CI/CD Pipeline environment — manages microservice deployments."""
 
     SUPPORTS_CONCURRENT_SESSIONS: bool = False
-    _last_instance = None  # Class-level ref for /grader endpoint
+    _register_callback = None  # Set by app.py to register active env for /grader
 
     def __init__(self):
         self._state = State(episode_id=str(uuid4()), step_count=0)
@@ -69,7 +69,8 @@ class PipelineEnvironment(Environment):
         self._episode_history = []
         self._viewed_actions = set()
         self._investigated_services = set()
-        PipelineEnvironment._last_instance = self
+        if PipelineEnvironment._register_callback:
+            PipelineEnvironment._register_callback(self)
 
         seed = TASK_SEEDS.get(self._task_name, 9999)
         scenario = load_scenario(self._task_name, seed)

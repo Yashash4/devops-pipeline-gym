@@ -54,7 +54,9 @@ class ServiceState:
         self.target_version = version
 
         # 8% chance of transient staging failure on first attempt
-        if not self.staging_verified and self._rng.random() < 0.08:
+        # Skip transient failure during incidents (health already degraded/down)
+        transient_roll = self._rng.random()
+        if not self.staging_verified and self.health == ServiceHealth.HEALTHY and transient_roll < 0.08:
             self.staging_deployed = True  # deployed but not verified
             self.logs.append(
                 f"[DEPLOY] Deployed {self.name} {version} to staging. "
@@ -147,8 +149,13 @@ class ServiceState:
         self.latency_ms = round(base_latency * (1.0 + 0.3 * recovery_steps), 1)
         self.error_rate = round(base_error_rate * (1.0 + 0.5 * recovery_steps), 3)
         # Trade-off: deploy causes temporary CPU/latency spike (warmup load)
-        self.cpu_percent = min(self.cpu_percent + 15, 99)
-        self.latency_ms += round(200 * self._rng.uniform(0.8, 1.2), 1)
+        # Clean deploy tasks get reduced spikes — they should be clean
+        if hasattr(self, '_task_name') and self._task_name == "clean_deploy":
+            self.cpu_percent = min(self.cpu_percent + 5, 99)
+            self.latency_ms += round(50 * self._rng.uniform(0.8, 1.2), 1)
+        else:
+            self.cpu_percent = min(self.cpu_percent + 15, 99)
+            self.latency_ms += round(200 * self._rng.uniform(0.8, 1.2), 1)
         self.last_deploy_timestamp = "2026-04-01T12:00:00Z"
         self.logs.append(
             f"[DEPLOY] Promoted {self.name} {version} to production. Health: HEALTHY. "
@@ -272,9 +279,10 @@ class PipelineEngine:
         # Initialize from scenario
         scenario.setup(self)
 
-        # Inject the shared RNG into all services created by the scenario
+        # Inject the shared RNG and task name into all services created by the scenario
         for svc in self.services.values():
             svc._rng = self._rng
+            svc._task_name = scenario.task_name
 
     def execute(self, action):
         """Execute an action. Returns human-readable result string."""
@@ -320,13 +328,13 @@ class PipelineEngine:
     def _tick_metric_compounding(self):
         """Metrics compound on each other — creates realistic spirals and recovery."""
         for name, svc in self.services.items():
-            # Degradation spirals
-            if svc.error_rate > 10.0:
-                svc.cpu_percent = min(svc.cpu_percent + 5, 99)
-            if svc.cpu_percent > 85:
-                svc.latency_ms = round(min(svc.latency_ms + 150, 5000), 1)
-            if svc.latency_ms > 2000:
-                svc.error_rate = round(min(svc.error_rate + 2.0, 50.0), 2)
+            # Degradation spirals (moderate — should not kill episodes in <5 steps)
+            if svc.error_rate > 15.0:
+                svc.cpu_percent = min(svc.cpu_percent + 3, 99)
+            if svc.cpu_percent > 90:
+                svc.latency_ms = round(min(svc.latency_ms + 100, 5000), 1)
+            if svc.latency_ms > 3000:
+                svc.error_rate = round(min(svc.error_rate + 1.0, 50.0), 2)
 
             # Natural recovery (when metrics are good, they help each other)
             if svc.error_rate < 2.0:
@@ -359,13 +367,13 @@ class PipelineEngine:
 
                 # Determine cascade severity
                 if health_pct < 20.0:
-                    # Source is effectively down — heavy cascade
-                    err_increase = 2.0
-                    lat_increase = 40.0
+                    # Source is effectively down — moderate cascade
+                    err_increase = 1.5
+                    lat_increase = 30.0
                 else:
                     # Source is degraded — lighter cascade
-                    err_increase = 1.0
-                    lat_increase = 20.0
+                    err_increase = 0.5
+                    lat_increase = 10.0
 
                 old_err = dep.error_rate
                 dep.error_rate = round(min(dep.error_rate + err_increase, 45.0), 2)
@@ -637,11 +645,11 @@ class PipelineEngine:
         if task == "judgment_call":
             api_gw = self.services.get("api-gateway")
             if api_gw and api_gw.health == ServiceHealth.DEGRADED:
-                degrade_lat = 200 * self._rng.uniform(0.8, 1.2)
-                degrade_err = 2.0 * self._rng.uniform(0.9, 1.1)
+                degrade_lat = 80 * self._rng.uniform(0.8, 1.2)
+                degrade_err = 0.8 * self._rng.uniform(0.9, 1.1)
                 api_gw.latency_ms = round(min(api_gw.latency_ms + degrade_lat, 5000), 1)
                 api_gw.error_rate = round(min(api_gw.error_rate + degrade_err, 50.0), 2)
-                api_gw.cpu_percent = min(api_gw.cpu_percent + 2, 99)
+                api_gw.cpu_percent = min(api_gw.cpu_percent + 1, 99)
                 api_gw.logs.append(
                     f"[DEGRADING] api-gateway latency now {api_gw.latency_ms:.0f}ms, "
                     f"errors {api_gw.error_rate:.1f}/s — situation worsening"

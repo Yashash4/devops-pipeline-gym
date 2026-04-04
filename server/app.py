@@ -19,6 +19,11 @@ app = create_app(
     max_concurrent_envs=1,
 )
 
+# Store active env on app.state so /grader can access it without class singletons.
+# PipelineEnvironment.reset() calls _register_callback if set.
+app.state.active_env = None
+PipelineEnvironment._register_callback = lambda env: setattr(app.state, "active_env", env)
+
 
 # --- Additional Required Endpoints -------------------------------------------
 
@@ -82,7 +87,7 @@ async def run_grader(task_name: str = "clean_deploy"):
     """Score from active session's episode history."""
     from server.graders import grade_task as _grade_task
 
-    env = PipelineEnvironment._last_instance
+    env = getattr(app.state, "active_env", None)
     if env is None or env.get_engine() is None:
         return {"task": task_name, "score": 0.0, "error": "No active session. Call /reset first."}
     score = _grade_task(

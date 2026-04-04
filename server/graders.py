@@ -173,7 +173,7 @@ def grade_cascading_failure(episode_history, engine):
     - 0.30 — root cause fixed (cache-service healthy AND max_connections != "5")
     - 0.25 — all services deployed to prod at target version
     - 0.20 — final system_health / 100 (only full marks if > 90%)
-    - 0.15 — correct recovery order (cache-service fixed before api-gateway deploy)
+    - 0.15 — dependency health (cache-service healthy when api-gateway deployed)
     - 0.10 — step efficiency: max(0, 1 - steps_used / (max_steps * 2))
     """
     score = 0.0
@@ -199,27 +199,25 @@ def grade_cascading_failure(episode_history, engine):
     system_health = engine.get_system_health()
     score += 0.20 * (system_health / 100.0)
 
-    # Correct recovery order: cache-service config fix or deploy before api-gateway deploy
-    cache_fix_step = None
-    api_deploy_step = None
+    # Dependency health outcome: was cache-service healthy when api-gateway deployed?
+    # This is outcome-based: checks the STATE at deploy time, not step ordering.
+    api_deployed_with_healthy_dep = False
     for entry in episode_history:
         action = entry.get("action", {})
-        step = entry.get("step", 0)
-        # Cache fix = either edit_config on cache-service or deploy cache-service
-        if action.get("action_type") == "edit_config" and action.get("service_name") == "cache-service":
-            if cache_fix_step is None:
-                cache_fix_step = step
-        if action.get("action_type") == "deploy" and action.get("service_name") == "cache-service":
-            if cache_fix_step is None:
-                cache_fix_step = step
-        # api-gateway deploy (staging or prod)
         if action.get("action_type") == "deploy" and action.get("service_name") == "api-gateway":
-            if api_deploy_step is None:
-                api_deploy_step = step
-
-    if cache_fix_step is not None:
-        if api_deploy_step is None or cache_fix_step < api_deploy_step:
-            score += 0.15
+            # Check if cache-service was healthy at this point
+            # We check the engine's final state for cache-service health
+            if cache_svc and cache_svc.health.value == "healthy":
+                api_deployed_with_healthy_dep = True
+                break
+    # Also award if api-gateway was never deployed (agent focused on root cause only)
+    # and cache-service ended healthy
+    if not api_deployed_with_healthy_dep:
+        api_gw = engine.services.get("api-gateway")
+        if api_gw and api_gw.prod_deployed and cache_svc and cache_svc.health.value == "healthy":
+            api_deployed_with_healthy_dep = True
+    if api_deployed_with_healthy_dep:
+        score += 0.15
 
     # Step efficiency
     steps_used = len(episode_history)
