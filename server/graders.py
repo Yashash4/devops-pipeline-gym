@@ -15,17 +15,17 @@ All criteria are outcome-based — no procedure bonuses.
 def grade_clean_deploy(episode_history, engine):
     """
     Task 1 grader:
-    - 0.50 * (services at target version in prod / total services)
+    - 0.50 * (services at target version in prod / services with targets)
     - 0.30 * (final system_health / 100)
     - 0.20 * max(0, 1 - steps_used / (max_steps * 2))
     """
-    total_services = len(engine.services)
-    deployed_count = 0
-    for svc in engine.services.values():
-        if svc.prod_deployed and svc.target_version and svc.current_version == svc.target_version:
-            deployed_count += 1
+    target_services = [s for s in engine.services.values() if s.target_version]
+    deployed_count = sum(
+        1 for svc in target_services
+        if svc.prod_deployed and svc.current_version == svc.target_version
+    )
 
-    deploy_ratio = deployed_count / total_services if total_services > 0 else 0.0
+    deploy_ratio = deployed_count / len(target_services) if target_services else 0.0
     system_health = engine.get_system_health()
 
     steps_used = len(episode_history)
@@ -56,14 +56,14 @@ def grade_broken_pipeline(episode_history, engine):
     if "add_index_users_email" in engine.migrations_applied:
         score += 0.15
 
-    # Services at target in prod
-    total_services = len(engine.services)
-    deployed_count = 0
-    for svc in engine.services.values():
-        if svc.prod_deployed and svc.target_version and svc.current_version == svc.target_version:
-            deployed_count += 1
-    if total_services > 0:
-        score += 0.30 * (deployed_count / total_services)
+    # Services at target in prod (only count services with deploy targets)
+    target_services = [s for s in engine.services.values() if s.target_version]
+    deployed_count = sum(
+        1 for svc in target_services
+        if svc.prod_deployed and svc.current_version == svc.target_version
+    )
+    if target_services:
+        score += 0.30 * (deployed_count / len(target_services))
 
     # System health
     system_health = engine.get_system_health()
@@ -186,14 +186,14 @@ def grade_cascading_failure(episode_history, engine):
         if cache_healthy and config_fixed:
             score += 0.30
 
-    # All services deployed to prod at target version
-    total_services = len(engine.services)
-    deployed_count = 0
-    for svc in engine.services.values():
-        if svc.prod_deployed and svc.target_version and svc.current_version == svc.target_version:
-            deployed_count += 1
-    if total_services > 0:
-        score += 0.25 * (deployed_count / total_services)
+    # All services deployed to prod at target version (only those with targets)
+    target_services = [s for s in engine.services.values() if s.target_version]
+    deployed_count = sum(
+        1 for svc in target_services
+        if svc.prod_deployed and svc.current_version == svc.target_version
+    )
+    if target_services:
+        score += 0.25 * (deployed_count / len(target_services))
 
     # System health
     system_health = engine.get_system_health()

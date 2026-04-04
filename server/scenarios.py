@@ -62,6 +62,29 @@ class CleanDeployScenario(Scenario):
     def setup(self, engine):
         from server.pipeline_engine import ServiceState
 
+        engine.services["database-primary"] = ServiceState(
+            name="database-primary",
+            version="v5.2.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "max_connections": "50",
+                "replication_lag_ms": "0",
+                "shared_buffers": "4GB",
+                "wal_level": "replica",
+            },
+            dependencies=[],
+            latency_ms=20.0,
+            error_rate=0.3,
+            cpu=30.0,
+            memory=60.0,
+        )
+        engine.services["database-primary"].prod_deployed = True
+        engine.services["database-primary"].logs = [
+            "2026-04-01T09:58:10.001Z INFO  [database-primary] PostgreSQL 15.4 started. max_connections=50. shared_buffers=4GB.",
+            "2026-04-01T09:58:10.112Z INFO  [database-primary] Replication lag: 0ms. WAL level: replica. All replicas in sync.",
+            "2026-04-01T09:58:10.334Z INFO  [database-primary] Connection pool: 12/50 active. Query throughput: 1.2k/s.",
+        ]
+
         engine.services["api-gateway"] = ServiceState(
             name="api-gateway",
             version="v2.3.0",
@@ -71,7 +94,7 @@ class CleanDeployScenario(Scenario):
                 "cache.ttl": "300",
                 "log.level": "info",
             },
-            dependencies=[],
+            dependencies=["database-primary"],
             latency_ms=45.0,
             error_rate=0.1,
             cpu=35.0,
@@ -140,6 +163,29 @@ class BrokenPipelineScenario(Scenario):
     def setup(self, engine):
         from server.pipeline_engine import ServiceState
 
+        engine.services["database-primary"] = ServiceState(
+            name="database-primary",
+            version="v5.2.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "max_connections": "50",
+                "replication_lag_ms": "0",
+                "shared_buffers": "4GB",
+                "wal_level": "replica",
+            },
+            dependencies=[],
+            latency_ms=30.0,
+            error_rate=0.5,
+            cpu=40.0,
+            memory=60.0,
+        )
+        engine.services["database-primary"].prod_deployed = True
+        engine.services["database-primary"].logs = [
+            "2026-04-01T10:00:00.001Z INFO  [database-primary] PostgreSQL 15.4 started. max_connections=50. shared_buffers=4GB.",
+            "2026-04-01T10:00:00.112Z INFO  [database-primary] Replication lag: 0ms. WAL level: replica. All replicas in sync.",
+            "2026-04-01T10:00:00.334Z INFO  [database-primary] Connection pool: 15/50 active. Query throughput: 1.4k/s.",
+        ]
+
         engine.services["api-gateway"] = ServiceState(
             name="api-gateway",
             version="v2.3.0",
@@ -149,7 +195,7 @@ class BrokenPipelineScenario(Scenario):
                 "cache.ttl": "300",
                 "log.level": "info",
             },
-            dependencies=[],
+            dependencies=["database-primary"],
             latency_ms=50.0,
             error_rate=0.2,
             cpu=40.0,
@@ -217,7 +263,7 @@ class BrokenPipelineScenario(Scenario):
                 "redis.max_connections": "50",
                 "redis.timeout": "5000",
             },
-            dependencies=[],
+            dependencies=["database-primary"],
             latency_ms=10.0,
             error_rate=0.0,
             cpu=15.0,
@@ -297,6 +343,30 @@ class JudgmentCallScenario(Scenario):
     def setup(self, engine):
         from server.pipeline_engine import ServiceState
 
+        engine.services["database-primary"] = ServiceState(
+            name="database-primary",
+            version="v5.2.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "max_connections": "50",
+                "replication_lag_ms": "0",
+                "shared_buffers": "4GB",
+                "wal_level": "replica",
+            },
+            dependencies=[],
+            latency_ms=120.0,
+            error_rate=1.5,
+            cpu=72.0,
+            memory=60.0,
+        )
+        engine.services["database-primary"].prod_deployed = True
+        engine.services["database-primary"].logs = [
+            "2026-04-01T11:44:50.001Z INFO  [database-primary] PostgreSQL 15.4 started. max_connections=50. shared_buffers=4GB.",
+            "2026-04-01T11:44:50.112Z INFO  [database-primary] Replication lag: 0ms. WAL level: replica. All replicas in sync.",
+            "2026-04-01T11:44:50.334Z WARN  [database-primary] Connection pool utilization rising: 38/50 active. CPU at 72%.",
+            "2026-04-01T11:44:51.001Z INFO  [database-primary] Slow query log: SELECT * FROM sessions WHERE expires_at < NOW() -- 850ms.",
+        ]
+
         engine.services["api-gateway"] = ServiceState(
             name="api-gateway",
             version="v2.3.1",
@@ -307,7 +377,7 @@ class JudgmentCallScenario(Scenario):
                 "cache.ttl": "300",
                 "log.level": "warn",
             },
-            dependencies=[],
+            dependencies=["database-primary"],
             latency_ms=1500.0,
             error_rate=12.0,
             cpu=85.0,
@@ -475,6 +545,29 @@ class CascadingFailureScenario(Scenario):
     def setup(self, engine):
         from server.pipeline_engine import ServiceState
 
+        engine.services["database-primary"] = ServiceState(
+            name="database-primary",
+            version="v5.2.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "max_connections": "50",
+                "replication_lag_ms": "0",
+                "shared_buffers": "4GB",
+                "wal_level": "replica",
+            },
+            dependencies=[],
+            latency_ms=20.0,
+            error_rate=0.3,
+            cpu=35.0,
+            memory=60.0,
+        )
+        engine.services["database-primary"].prod_deployed = True
+        engine.services["database-primary"].logs = [
+            "2026-04-01T12:00:00.001Z INFO  [database-primary] PostgreSQL 15.4 started. max_connections=50. shared_buffers=4GB.",
+            "2026-04-01T12:00:00.112Z INFO  [database-primary] Replication lag: 0ms. WAL level: replica. All replicas in sync.",
+            "2026-04-01T12:00:00.334Z INFO  [database-primary] Connection pool: 14/50 active. Query throughput: 1.1k/s.",
+        ]
+
         # ROOT CAUSE: cache-service is degraded with a config error
         engine.services["cache-service"] = ServiceState(
             name="cache-service",
@@ -485,7 +578,7 @@ class CascadingFailureScenario(Scenario):
                 "redis.max_connections": "5",
                 "redis.timeout": "5000",
             },
-            dependencies=[],
+            dependencies=["database-primary"],
             latency_ms=2000.0,
             error_rate=25.0,
             cpu=8.0,
@@ -517,7 +610,7 @@ class CascadingFailureScenario(Scenario):
                 "cache.backend": "redis",
                 "log.level": "info",
             },
-            dependencies=["cache-service"],
+            dependencies=["cache-service", "database-primary"],
             latency_ms=300.0,
             error_rate=5.0,
             cpu=60.0,
