@@ -280,12 +280,15 @@ class JudgmentCallScenario(Scenario):
                 "(2000ms latency, 15 errors/sec). A hotfix v2.3.2 is available "
                 "but only smoke-tested — it includes an auth middleware refactor "
                 "that may break web-frontend. Revenue is bleeding at $500/min. "
-                "You have limited time to resolve this. Health degrades every step."
+                "You have limited time to resolve this. Health degrades every step. "
+                "Note: the hotfix v2.3.2 switches authentication from HS256 to RS256. "
+                "If deploying the hotfix, you may need to update web-frontend's "
+                "auth configuration for compatibility."
             ),
             goal=(
                 "Restore api-gateway to healthy state (latency <100ms, "
                 "error rate <1/s). Keep web-frontend healthy. "
-                "Minimize downtime. Avoid introducing new issues."
+                "Resolve the incident. Consider all side effects of your chosen approach."
             ),
             max_steps=12,
         )

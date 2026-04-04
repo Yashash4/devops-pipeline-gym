@@ -80,37 +80,67 @@ def grade_broken_pipeline(episode_history, engine):
 
 def grade_judgment_call(episode_history, engine):
     """
-    Task 3 grader (all outcome-based, strict):
-    - 0.30 — api-gateway incident resolved (latency < 100ms AND error_rate < 1.0)
-      - Partial: 0.10 if latency < 500ms
-    - 0.25 — web-frontend still healthy (health == healthy AND error_rate < 2.0)
-      - Partial: 0.10 if degraded but error_rate < 10.0
-    - 0.15 — time to resolution: max(0, 1 - resolution_step / 10) * 0.15
-    - 0.15 — no new issues introduced (no broke_healthy events)
-      - Partial: 0.05 if only 1 new issue
-    - 0.15 — final system_health / 100
+    Task 3 grader — 3 valid paths with different scores:
+    - Expert path: deploy hotfix + fix web-frontend auth config -> best score
+    - Hotfix only: deploy hotfix without fixing auth -> partial score
+    - Rollback: safe but loses features -> moderate score
+
+    Dimensions:
+    - 0.30 — incident resolution (path-aware)
+    - 0.25 — web-frontend collateral damage
+    - 0.15 — time to resolution
+    - 0.15 — no new issues introduced
+    - 0.15 — final system health
     """
     score = 0.0
     api_gw = engine.services.get("api-gateway")
     web_fe = engine.services.get("web-frontend")
 
-    # api-gateway incident resolved
+    # Detect which path the agent took
+    deployed_hotfix = False
+    did_rollback = False
+    fixed_auth_config = False
+    for entry in episode_history:
+        action = entry.get("action", {})
+        if action.get("action_type") == "deploy" and action.get("service_name") == "api-gateway":
+            if action.get("target_version") == "v2.3.2":
+                deployed_hotfix = True
+        if action.get("action_type") == "rollback" and action.get("service_name") == "api-gateway":
+            did_rollback = True
+        if action.get("action_type") == "edit_config" and action.get("service_name") == "web-frontend":
+            edits = action.get("config_edits", [])
+            for edit in edits:
+                if edit.get("key") == "api.auth_version" and edit.get("value") == "v2":
+                    fixed_auth_config = True
+
+    # Incident resolution (path-aware)
     resolved = False
     if api_gw:
-        if api_gw.latency_ms < 100 and api_gw.error_rate < 1.0:
-            score += 0.30
+        api_healthy = api_gw.health.value == "healthy" and api_gw.error_rate < 5.0
+        api_fully_resolved = api_gw.latency_ms < 100 and api_gw.error_rate < 1.0
+        if deployed_hotfix and fixed_auth_config and api_healthy:
+            score += 0.30  # Expert path: full credit (root cause fixed + auth handled)
+            resolved = True
+        elif api_fully_resolved:
+            resolved = True
+            if did_rollback:
+                score += 0.20  # Rollback: safe but lost features
+            else:
+                score += 0.25  # Some other resolution
+        elif deployed_hotfix and api_healthy:
+            score += 0.15  # Hotfix without auth fix: partial
             resolved = True
         elif api_gw.latency_ms < 500:
-            score += 0.10
+            score += 0.10  # Partial improvement
 
-    # web-frontend collateral damage check
+    # web-frontend collateral damage
     if web_fe:
         if web_fe.health.value == "healthy" and web_fe.error_rate < 2.0:
             score += 0.25
         elif web_fe.error_rate < 10.0:
             score += 0.10
 
-    # Time to resolution (stricter denominator: 10 instead of 15)
+    # Time to resolution
     resolution_step = len(episode_history)
     if resolved:
         for entry in episode_history:

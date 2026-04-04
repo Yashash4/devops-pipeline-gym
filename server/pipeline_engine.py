@@ -113,20 +113,51 @@ class ServiceState:
         self._recovery_steps_remaining = recovery_steps
         base_latency = 45.0 * self._rng.uniform(0.8, 1.2)
         base_error_rate = 0.1 * self._rng.uniform(0.9, 1.1)
+
+        # Non-linear deploy quality: same seed = same outcome
+        quality_roll = self._rng.random()
+        deploy_note = ""
+        if quality_roll < 0.7:
+            # Clean deploy — recovers to near-perfect
+            pass  # base values are already good
+        elif quality_roll < 0.9:
+            # Minor issues — recovers to good but not perfect
+            base_latency *= 1.5
+            base_error_rate *= 3.0
+            deploy_note = " Minor post-deploy issues detected."
+            self.logs.append(
+                f"[DEPLOY] {self.name}: Minor post-deploy issues detected. "
+                f"Performance slightly below optimal."
+            )
+        else:
+            # Unstable deploy — recovers poorly
+            base_latency *= 2.5
+            base_error_rate *= 8.0
+            self.error_rate += 1.5
+            deploy_note = " Post-deploy instability detected."
+            self.logs.append(
+                f"[DEPLOY] {self.name}: Post-deploy instability detected. "
+                f"Elevated error rate."
+            )
+
         self._recovery_target_latency = round(base_latency, 1)
         self._recovery_target_error_rate = round(base_error_rate, 3)
         # Start at slightly elevated values during recovery
         self.health = ServiceHealth.HEALTHY
         self.latency_ms = round(base_latency * (1.0 + 0.3 * recovery_steps), 1)
         self.error_rate = round(base_error_rate * (1.0 + 0.5 * recovery_steps), 3)
+        # Trade-off: deploy causes temporary CPU/latency spike (warmup load)
+        self.cpu_percent = min(self.cpu_percent + 15, 99)
+        self.latency_ms += round(200 * self._rng.uniform(0.8, 1.2), 1)
         self.last_deploy_timestamp = "2026-04-01T12:00:00Z"
         self.logs.append(
             f"[DEPLOY] Promoted {self.name} {version} to production. Health: HEALTHY. "
-            f"Stabilizing over ~{recovery_steps} step(s)."
+            f"Stabilizing over ~{recovery_steps} step(s). CPU/latency spike from warmup."
         )
         return (
             f"Promoted {self.name} {version} to production. Health: HEALTHY. "
-            f"Performance stabilizing."
+            f"Deployed successfully. Service under warmup load — temporary CPU/latency spike expected."
+            f"{deploy_note}"
         )
 
     def tick_recovery(self):
@@ -153,22 +184,38 @@ class ServiceState:
         lat_mult = self._rng.uniform(0.8, 1.2)
         err_mult = self._rng.uniform(0.9, 1.1)
         self.error_rate = round(0.5 * err_mult, 3)
-        self.latency_ms = round(50.0 * lat_mult, 1)
+        self.latency_ms = round(50.0 * lat_mult * 0.7, 1)
         self.staging_deployed = False
         self.staging_verified = False
         self.prod_deployed = True  # still in prod, just rolled back
         self._recovery_steps_remaining = 0
-        self.logs.append(
-            f"[ROLLBACK] Rolled back {self.name} to {self.current_version}. Service healthy."
-        )
-        return f"Rolled back {self.name} to {self.current_version}. Service healthy."
+        # Trade-off: 25% chance rollback reintroduces a known bug
+        regression = False
+        if self._rng.random() < 0.25:
+            self.error_rate = round(self.error_rate + 3.0, 2)
+            regression = True
+            self.logs.append(
+                f"[ROLLBACK] Rolled back {self.name} to {self.current_version}. "
+                f"Warning: rollback may have reintroduced known issue from previous version"
+            )
+        else:
+            self.logs.append(
+                f"[ROLLBACK] Rolled back {self.name} to {self.current_version}. Service healthy."
+            )
+        result = f"Rolled back {self.name} to {self.current_version}. Rolled back. Monitoring for regression..."
+        if regression:
+            result += f" WARNING: Error rate elevated ({self.error_rate:.1f}/s) — possible regression."
+        return result
 
     def set_config(self, key, value):
         """Edit a config value."""
         old = self.config.get(key, "<not set>")
         self.config[key] = value
-        self.logs.append(f"[CONFIG] {self.name}: {key} changed from '{old}' to '{value}'")
-        return f"Config {self.name}: {key} changed from '{old}' to '{value}'"
+        # Trade-off: config change causes brief restart spike
+        self.latency_ms += round(100 * self._rng.uniform(0.8, 1.2), 1)
+        self.cpu_percent = min(self.cpu_percent + 5, 99)
+        self.logs.append(f"[CONFIG] {self.name}: {key} changed from '{old}' to '{value}'. Service restarting.")
+        return f"Config {self.name}: {key} changed from '{old}' to '{value}'. Config updated. Service restarting — brief latency spike."
 
     def get_config_snapshot(self):
         return dict(self.config)
@@ -263,7 +310,31 @@ class PipelineEngine:
         else:
             result = "Unknown action."
 
+        # Cross-metric compounding: metrics affect each other
+        self._tick_metric_compounding()
+
         return result
+
+    # --- Cross-metric compounding ---------------------------------------------
+
+    def _tick_metric_compounding(self):
+        """Metrics compound on each other — creates realistic spirals and recovery."""
+        for name, svc in self.services.items():
+            # Degradation spirals
+            if svc.error_rate > 10.0:
+                svc.cpu_percent = min(svc.cpu_percent + 5, 99)
+            if svc.cpu_percent > 85:
+                svc.latency_ms = round(min(svc.latency_ms + 150, 5000), 1)
+            if svc.latency_ms > 2000:
+                svc.error_rate = round(min(svc.error_rate + 2.0, 50.0), 2)
+
+            # Natural recovery (when metrics are good, they help each other)
+            if svc.error_rate < 2.0:
+                svc.cpu_percent = max(svc.cpu_percent - 3, 10)
+            if svc.cpu_percent < 50:
+                svc.latency_ms = round(max(svc.latency_ms - 50, 20), 1)
+            if svc.latency_ms < 200 and svc.error_rate < 1.0:
+                svc.error_rate = round(max(svc.error_rate - 0.5, 0.0), 2)
 
     # --- Cascading failures ---------------------------------------------------
 
@@ -330,6 +401,15 @@ class PipelineEngine:
                     f"{dep.name} error_rate now {dep.error_rate:.1f}/s, "
                     f"latency {dep.latency_ms:.0f}ms"
                 )
+
+        # Recovery propagation: healthy services help their dependents recover
+        for name, svc in self.services.items():
+            if svc.health == ServiceHealth.HEALTHY and svc.error_rate < 2.0:
+                dependents = self._get_dependents(name)
+                for dep in dependents:
+                    if dep.health == ServiceHealth.DEGRADED:
+                        dep.error_rate = round(dep.error_rate * 0.9, 2)
+                        dep.latency_ms = round(dep.latency_ms * 0.9, 1)
 
     # --- Action handlers ------------------------------------------------------
 
