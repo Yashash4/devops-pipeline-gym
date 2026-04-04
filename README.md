@@ -71,6 +71,7 @@ Diagnose test failures, fix a config error, run a migration, and deploy 3 servic
 Production incident with api-gateway at 2000ms latency and 15 errors/sec. A partially-tested hotfix is available. Multiple valid resolution paths with different risk/reward tradeoffs. Health degrades every step.
 - **Max steps**: 12
 - **Dilemma**: Deploy untested hotfix (breaks web-frontend auth) vs rollback (loses web-frontend API endpoint) — every path has cascading consequences
+- **Three valid resolution paths**: deploy hotfix + fix auth config (expert path), rollback (safe), or hotfix only (partial fix). Each scores differently.
 
 ### Task 4: "Cascading Failure" (Medium-Hard)
 Root cause analysis across a dependency chain. cache-service is down (config error), dragging api-gateway and web-frontend down via cascading failures. Agent must identify and fix the root cause first — fixing downstream services while the root cause persists is futile.
@@ -87,6 +88,8 @@ Outcome-based rewards (never procedure-based):
 - **+0.005** per 1% system health improvement
 - **-0.30** for breaking a healthy service (catastrophic penalty)
 - **-0.01** for true no-ops (not investigation actions)
+
+Actions have trade-off effects: deploys cause temporary CPU/latency spikes, rollbacks risk regression, config edits cause restart latency. Cross-metric compounding: degraded metrics worsen each other (error->CPU->latency spirals), healthy metrics help each other recover.
 
 ## Baseline Scores
 
@@ -157,7 +160,7 @@ devops_pipeline_env/
     ├── app.py               # FastAPI app with create_app()
     ├── pipeline_environment.py  # Main Environment class
     ├── pipeline_engine.py   # Service state machine + simulation
-    ├── scenarios.py         # Task 1, 2, 3 scenario definitions
-    ├── graders.py           # 3 deterministic graders (0.0-1.0)
+    ├── scenarios.py         # Task 1-4 scenario definitions
+    ├── graders.py           # 4 deterministic graders (0.0-1.0)
     └── rewards.py           # Outcome-based reward calculator
 ```
