@@ -59,24 +59,27 @@ This environment is useful for:
 ### Task 1: "Clean Deploy" (Easy)
 Deploy 2 services with all tests passing. No complications. Tests execution and basic pipeline management.
 - **Max steps**: 15
-- **Services**: api-gateway (v2.3.0 -> v2.3.1), web-frontend (v1.8.0 -> v1.9.0)
+- **Services**: database-primary (healthy, no action needed), api-gateway (v2.3.0 -> v2.3.1), web-frontend (v1.8.0 -> v1.9.0)
+- **Dependency graph**: database-primary <- api-gateway <- web-frontend
 
 ### Task 2: "Broken Pipeline" (Medium)
 Diagnose test failures, fix a config error, run a migration, and deploy 3 services. Not all test failures are blocking -- the agent must distinguish flaky tests from real bugs.
 - **Max steps**: 20
-- **Services**: api-gateway, web-frontend, cache-service
+- **Services**: database-primary (healthy), api-gateway, web-frontend, cache-service
+- **Dependency graph**: database-primary <- api-gateway, database-primary <- cache-service, api-gateway <- web-frontend
 - **Challenges**: 3 test failures (2 flaky, 1 deprecated), wrong Redis host in cache-service config, pending migration blocks api-gateway
 
 ### Task 3: "The Judgment Call" (Hard)
 Production incident with api-gateway at 1500ms latency and 12 errors/sec. A partially-tested hotfix is available. Multiple valid resolution paths with different risk/reward tradeoffs. Health degrades every step.
 - **Max steps**: 12
+- **Services**: database-primary (under load, CPU 72%), api-gateway (degraded), web-frontend (healthy)
 - **Dilemma**: Deploy untested hotfix (breaks web-frontend auth) vs rollback (loses web-frontend API endpoint) — every path has cascading consequences
 - **Three valid resolution paths**: deploy hotfix + fix auth config (expert path), rollback (safe), or hotfix only (partial fix). Each scores differently.
 
 ### Task 4: "Cascading Failure" (Medium-Hard)
 Root cause analysis across a dependency chain. cache-service is down (config error), dragging api-gateway and web-frontend down via cascading failures. Agent must identify and fix the root cause first — fixing downstream services while the root cause persists is futile.
 - **Max steps**: 15
-- **Services**: web-frontend -> api-gateway -> cache-service (dependency chain)
+- **Services**: database-primary (healthy) <- cache-service (root cause) <- api-gateway <- web-frontend
 - **Challenge**: Fix cache-service config (max_connections: 5 -> 50), deploy cache-service, then recover downstream services in order
 
 ## Reward Design
