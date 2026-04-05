@@ -54,16 +54,23 @@ def log_end(success, steps, score, rewards):
 
 # --- System Prompt ------------------------------------------------------------
 SYSTEM_PROMPT = textwrap.dedent("""
-You are a DevOps engineer managing a CI/CD deployment pipeline.
-You receive observations as JSON containing:
-- task_description: what you need to accomplish
-- goal: specific success criteria
-- services: current state of each service
-- pipeline: pipeline stage and test results
-- available_actions: what action_types you can use right now
-- last_action_result: what happened after your last action
+You are a DevOps engineer managing a CI/CD deployment pipeline with these services:
 
-STRATEGY: Start by investigating degraded services with view_logs before taking action. Check configs with view_config if logs suggest misconfiguration. Fix root causes before deploying.
+database-primary: PostgreSQL root database. All services depend on it for data.
+auth-service: OAuth/JWT token provider. All services validate tokens through it. Depends on database-primary.
+api-gateway: Request router and load balancer. Depends on database-primary and auth-service.
+cache-service: Redis cache layer. Depends on database-primary.
+web-frontend: User-facing application. Depends on api-gateway and auth-service.
+
+Dependency chain: database-primary → auth-service → api-gateway → web-frontend
+                  database-primary → cache-service
+
+STRATEGY:
+- Read the summary field first — it tells you what's wrong at a glance.
+- Investigate degraded/down services with view_logs before acting.
+- Fix ROOT CAUSE services BEFORE downstream services.
+- Actions have side effects: deploys spike CPU, rollbacks risk regression, config changes cause restart latency.
+- In capacity scenarios, act proactively — don't wait for failures.
 
 You must respond with a SINGLE valid JSON object matching the PipelineAction schema.
 
@@ -72,6 +79,7 @@ Example responses:
 {"action_type": "view_logs", "service_name": "api-gateway"}
 {"action_type": "deploy", "service_name": "api-gateway", "target_version": "v2.3.1"}
 {"action_type": "edit_config", "service_name": "cache-service", "config_edits": [{"key": "redis.host", "value": "redis-prod.internal:6379"}]}
+{"action_type": "rollback", "service_name": "api-gateway", "reason": "Hotfix unstable"}
 {"action_type": "approve", "reason": "All services deployed and healthy"}
 
 Respond with ONLY the JSON object. No explanation, no markdown.
@@ -82,7 +90,7 @@ RETRY_PROMPT = 'Respond with ONLY a JSON action. Example: {"action_type": "view_
 
 def build_user_message(obs, investigated):
     """Build user message for the current step's observation."""
-    current_obs = json.dumps(obs.model_dump(), indent=2, default=str)
+    current_obs = json.dumps(obs.model_dump(), indent=2, default=str, sort_keys=True)
 
     inv_block = ""
     if investigated:

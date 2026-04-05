@@ -17,6 +17,7 @@ from devops_pipeline_env.models import (
     ActionType,
     PipelineAction,
     PipelineObservation,
+    ServiceHealth,
     ServiceStatus,
 )
 from server.graders import grade_task
@@ -206,6 +207,20 @@ class PipelineEnvironment(Environment):
         if hint and not self._investigated_services:
             goal = goal + hint
 
+        # Build summary from raw engine state (not filtered)
+        alerts = []
+        for name, svc_state in self._engine.services.items():
+            if svc_state.health == ServiceHealth.DOWN:
+                alerts.append(f"CRITICAL: {name} is DOWN")
+            elif svc_state.health == ServiceHealth.DEGRADED:
+                alerts.append(
+                    f"WARNING: {name} degraded "
+                    f"(lat={svc_state.latency_ms:.0f}ms, err={svc_state.error_rate:.1f}/s)"
+                )
+            elif svc_state.cpu_percent > 80:
+                alerts.append(f"CAUTION: {name} CPU high ({svc_state.cpu_percent:.0f}%)")
+        summary = "; ".join(alerts) if alerts else "All services nominal."
+
         return PipelineObservation(
             task_description=scenario.task_description,
             goal=goal,
@@ -221,6 +236,7 @@ class PipelineEnvironment(Environment):
             config_snapshot=config_snapshot,
             done=done,
             reward=reward,
+            summary=summary,
         )
 
     def _get_available_actions(self):

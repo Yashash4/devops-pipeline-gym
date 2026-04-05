@@ -172,3 +172,7 @@ class PipelineObservation(Observation):
         default=None,
         description="Current config key-value pairs when viewing/editing config.",
     )
+    summary: Optional[str] = Field(
+        default=None,
+        description="Quick status summary highlighting degraded/down services.",
+    )
