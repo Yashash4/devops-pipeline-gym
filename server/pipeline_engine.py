@@ -710,3 +710,16 @@ class PipelineEngine:
                     f"[DEGRADING] api-gateway missing index — "
                     f"user query latency now {api_gw.latency_ms:.0f}ms"
                 )
+
+        elif task == "capacity_crisis":
+            db = self.services.get("database-primary")
+            api_gw = self.services.get("api-gateway")
+            # Time pressure only while connection pool bottleneck persists
+            if db and self.scenario.check_config_error("database-primary", db.config):
+                db.cpu_percent = min(db.cpu_percent + 3, 99)
+                db.latency_ms = round(db.latency_ms + 20, 1)
+            # api-gateway degrades only while db bottleneck persists
+            if (api_gw and api_gw.health == ServiceHealth.DEGRADED
+                    and db and self.scenario.check_config_error("database-primary", db.config)):
+                api_gw.latency_ms = round(min(api_gw.latency_ms + 30, 5000), 1)
+                api_gw.error_rate = round(min(api_gw.error_rate + 0.5, 50.0), 2)

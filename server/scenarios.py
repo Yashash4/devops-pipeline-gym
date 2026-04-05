@@ -777,11 +777,190 @@ class CascadingFailureScenario(Scenario):
         return False
 
 
+class CapacityCrisisScenario(Scenario):
+    """Task 5: Medium-Hard — capacity crisis, prevent collapse under 4x traffic.
+
+    database-primary connection pool nearly full (47/50). api-gateway degraded.
+    Agent must increase capacity at the bottleneck before tipping points trigger
+    cascading failures. Inaction = death spiral.
+    """
+
+    def __init__(self):
+        super().__init__(
+            task_name="capacity_crisis",
+            task_description=(
+                "CAPACITY CRISIS. Peak traffic is 4x normal. database-primary "
+                "connection pool is nearly full (47/50). api-gateway is degraded "
+                "under load. Systems are straining but nothing has failed yet. "
+                "You must stabilize the system before services start collapsing. "
+                "Every step of inaction risks tipping points."
+            ),
+            goal=(
+                "Prevent system collapse. Keep all services above critical health. "
+                "Address the root bottleneck (database connection capacity). "
+                "Stabilize api-gateway."
+            ),
+            max_steps=15,
+        )
+
+    def setup(self, engine):
+        from server.pipeline_engine import ServiceState
+
+        engine.services["database-primary"] = ServiceState(
+            name="database-primary",
+            version="v5.2.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "max_connections": "50",
+                "replication_lag_ms": "0",
+                "shared_buffers": "4GB",
+                "wal_level": "replica",
+            },
+            dependencies=[],
+            latency_ms=180.0,
+            error_rate=3.2,
+            cpu=72.0,
+            memory=70.0,
+        )
+        engine.services["database-primary"].prod_deployed = True
+        engine.services["database-primary"].logs = [
+            "2026-04-01T16:30:01.001Z WARN  [database-primary] Connection pool utilization: 94% (47/50 active). Queue depth: 23 pending requests.",
+            "2026-04-01T16:30:02.112Z WARN  [database-primary] Slow query detected: SELECT * FROM orders WHERE user_id IN (SELECT...) -- 1.2s execution time. Sequential scan on orders table (2.4M rows).",
+            "2026-04-01T16:30:03.334Z INFO  [database-primary] Autovacuum running on users table. Last vacuum: 6 hours ago.",
+        ]
+
+        engine.services["auth-service"] = ServiceState(
+            name="auth-service",
+            version="v3.1.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "token_ttl_seconds": "3600",
+                "jwt_algorithm": "RS256",
+                "rate_limit_per_minute": "1000",
+                "cert_expiry": "2026-12-01",
+            },
+            dependencies=["database-primary"],
+            latency_ms=50.0,
+            error_rate=0.8,
+            cpu=45.0,
+            memory=40.0,
+        )
+        engine.services["auth-service"].prod_deployed = True
+        engine.services["auth-service"].logs = [
+            "2026-04-01T16:30:00.501Z INFO  [auth-service] OAuth2 provider running. Algorithm: RS256. TTL: 3600s.",
+            "2026-04-01T16:30:01.112Z INFO  [auth-service] Rate limiter: 850/1000 requests per minute. Headroom: 15%.",
+        ]
+
+        engine.services["api-gateway"] = ServiceState(
+            name="api-gateway",
+            version="v2.3.1",
+            health=ServiceHealth.DEGRADED,
+            config={
+                "database.pool_size": "20",
+                "cache.ttl": "300",
+                "log.level": "warn",
+            },
+            dependencies=["database-primary", "auth-service"],
+            latency_ms=450.0,
+            error_rate=5.1,
+            cpu=82.0,
+            memory=65.0,
+        )
+        engine.services["api-gateway"].prod_deployed = True
+        engine.services["api-gateway"].logs = [
+            "2026-04-01T16:30:05.001Z WARN  [api-gateway] Request queue depth: 156. Average response time: 450ms (threshold: 200ms).",
+            "2026-04-01T16:30:06.112Z ERROR [api-gateway] Upstream timeout: database-primary did not respond within 3000ms. Retry 2/3.",
+            "2026-04-01T16:30:07.334Z INFO  [api-gateway] Rate limiter: 82% of capacity. Non-critical endpoints: /api/v1/recommendations, /api/v1/analytics",
+        ]
+
+        engine.services["cache-service"] = ServiceState(
+            name="cache-service",
+            version="v1.2.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "redis.host": "redis-prod.internal:6379",
+                "redis.max_connections": "50",
+                "redis.timeout": "5000",
+                "eviction_policy": "lru",
+                "max_memory": "2GB",
+            },
+            dependencies=["database-primary"],
+            latency_ms=80.0,
+            error_rate=1.2,
+            cpu=55.0,
+            memory=50.0,
+        )
+        engine.services["cache-service"].prod_deployed = True
+        engine.services["cache-service"].logs = [
+            "2026-04-01T16:30:01.334Z INFO  [cache-service] Redis connection pool: 35/50 connections. Hit rate: 78.3%.",
+            "2026-04-01T16:30:02.112Z WARN  [cache-service] Cache miss rate elevated: 21.7% (baseline: 6%). More queries falling through to database-primary.",
+            "2026-04-01T16:30:03.001Z DEBUG [cache-service] GC pause: 12ms (Young), heap: 380MB/512MB. Within acceptable thresholds.",
+        ]
+
+        engine.services["web-frontend"] = ServiceState(
+            name="web-frontend",
+            version="v1.9.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "api.endpoint": "https://api.internal:8080",
+                "cdn.enabled": "true",
+                "log.level": "info",
+            },
+            dependencies=["api-gateway", "auth-service"],
+            latency_ms=200.0,
+            error_rate=2.0,
+            cpu=60.0,
+            memory=45.0,
+        )
+        engine.services["web-frontend"].prod_deployed = True
+        engine.services["web-frontend"].logs = [
+            "2026-04-01T16:30:10.112Z WARN  [web-frontend] Upstream api-gateway latency elevated: p95=520ms (baseline: 45ms).",
+            "2026-04-01T16:30:11.445Z INFO  [web-frontend] Request histogram: p50=180ms, p95=450ms, p99=1200ms. Baseline was p50=12ms.",
+            "2026-04-01T16:30:12.001Z WARN  [web-frontend] User-facing error rate: 2.0/s. Support tickets increasing.",
+        ]
+
+        engine.commit_sha = "p3q4r5s"
+        engine.triggered_by = "traffic-spike-alert"
+        engine.test_pass = 145
+        engine.test_fail = 0
+        engine.build_logs = "Build succeeded. 145/145 tests passed."
+
+        engine.alerts = [
+            AlertInfo(
+                severity="critical",
+                message="database-primary connection pool at 94% (47/50). Queue depth 23. Risk of connection exhaustion.",
+                service_name="database-primary",
+                timestamp="2026-04-01T16:30:01Z",
+            ),
+            AlertInfo(
+                severity="warning",
+                message="api-gateway DEGRADED — upstream database timeouts causing 450ms avg response time.",
+                service_name="api-gateway",
+                timestamp="2026-04-01T16:30:05Z",
+            ),
+            AlertInfo(
+                severity="info",
+                message="Traffic spike detected: 4x normal load. All services under increased pressure.",
+                service_name="web-frontend",
+                timestamp="2026-04-01T16:30:10Z",
+            ),
+        ]
+
+        engine._time_pressure = True
+
+    def check_config_error(self, service_name, config):
+        """database-primary has max_connections=50 (too low for 4x traffic)."""
+        if service_name == "database-primary":
+            return int(config.get("max_connections", "50")) < 75
+        return False
+
+
 SCENARIOS = {
     "clean_deploy": CleanDeployScenario,
     "broken_pipeline": BrokenPipelineScenario,
     "judgment_call": JudgmentCallScenario,
     "cascading_failure": CascadingFailureScenario,
+    "capacity_crisis": CapacityCrisisScenario,
 }
 
 

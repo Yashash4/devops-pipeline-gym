@@ -56,6 +56,12 @@ def get_tasks():
                 "description": "Root cause analysis across dependency chain. cache-service down, dragging api-gateway and web-frontend. Fix root cause first.",
                 "max_steps": 15,
             },
+            {
+                "name": "capacity_crisis",
+                "difficulty": "medium-hard",
+                "description": "Peak traffic 4x normal. database-primary connection pool nearly full. Stabilize before tipping points trigger cascading collapse.",
+                "max_steps": 15,
+            },
         ],
         "action_schema": PipelineAction.model_json_schema(),
     }
@@ -76,6 +82,7 @@ async def run_baseline():
             "broken_pipeline": 0.482,
             "judgment_call": 0.184,
             "cascading_failure": 0.280,
+            "capacity_crisis": 0.280,
         },
         "model": "Qwen/Qwen2.5-72B-Instruct",
         "note": "Recorded from inference.py run on 2026-04-04.",

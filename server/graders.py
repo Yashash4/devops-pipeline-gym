@@ -235,11 +235,60 @@ def grade_cascading_failure(episode_history, engine):
     return min(max(score, 0.0), 1.0)
 
 
+def grade_capacity_crisis(episode_history, engine):
+    """
+    Task 5 grader — capacity crisis (all outcome-based):
+    - 0.35 — system stability: final system health
+    - 0.25 — root cause: database-primary protected (CPU<85, config fixed)
+    - 0.25 — critical services maintained (api-gateway not DOWN)
+    - 0.15 — proactive response: no service went DOWN during episode
+    """
+    score = 0.0
+    db = engine.services.get("database-primary")
+    api_gw = engine.services.get("api-gateway")
+
+    # System stability (0.35)
+    system_health = engine.get_system_health()
+    score += min(system_health / 70.0, 1.0) * 0.35
+
+    # Root cause: database protected (0.25)
+    if db:
+        max_conn = int(db.config.get("max_connections", "50"))
+        if max_conn >= 100 and db.cpu_percent < 85:
+            score += 0.25
+        elif max_conn >= 75:
+            score += 0.15
+        elif db.cpu_percent < 85:
+            score += 0.10
+
+    # Critical services maintained (0.25)
+    if api_gw:
+        if api_gw.health.value != "down":
+            if api_gw.error_rate < 5.0:
+                score += 0.25
+            elif api_gw.error_rate < 10.0:
+                score += 0.15
+            else:
+                score += 0.05
+
+    # Proactive response: no service went DOWN during episode (0.15)
+    any_went_down = any(
+        entry.get("broke_healthy", False) for entry in episode_history
+    )
+    if not any_went_down:
+        score += 0.15
+    elif system_health > 30:
+        score += 0.05
+
+    return min(max(score, 0.0), 1.0)
+
+
 GRADERS = {
     "clean_deploy": grade_clean_deploy,
     "broken_pipeline": grade_broken_pipeline,
     "judgment_call": grade_judgment_call,
     "cascading_failure": grade_cascading_failure,
+    "capacity_crisis": grade_capacity_crisis,
 }
 
 

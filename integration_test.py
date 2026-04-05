@@ -71,8 +71,8 @@ print("\n=== TEST 4: GET /tasks — 4 tasks ===", flush=True)
 from server.app import get_tasks
 tasks_resp = get_tasks()
 task_names = [t["name"] for t in tasks_resp["tasks"]]
-report("4 tasks returned", len(task_names) == 4, f"tasks={task_names}")
-for expected_task in ["clean_deploy", "broken_pipeline", "judgment_call", "cascading_failure"]:
+report("5 tasks returned", len(task_names) == 5, f"tasks={task_names}")
+for expected_task in ["clean_deploy", "broken_pipeline", "judgment_call", "cascading_failure", "capacity_crisis"]:
     report(f"  task '{expected_task}' present", expected_task in task_names)
 
 
@@ -168,11 +168,31 @@ def run_cascading_failure():
     return score
 
 
+def run_capacity_crisis():
+    os.environ["DEVOPS_TASK"] = "capacity_crisis"
+    env = PipelineEnvironment()
+    obs = env.reset()
+    actions = [
+        make_action(ActionType.VIEW_LOGS, service_name="database-primary"),
+        make_action(ActionType.EDIT_CONFIG, service_name="database-primary",
+                    config_edits=[ConfigEdit(key="max_connections", value="100")]),
+        make_action(ActionType.EDIT_CONFIG, service_name="cache-service",
+                    config_edits=[ConfigEdit(key="max_memory", value="4GB")]),
+        make_action(ActionType.VIEW_PIPELINE),
+        make_action(ActionType.APPROVE, reason="Stabilized"),
+    ]
+    for a in actions:
+        obs = env.step(a)
+    score = grade_task("capacity_crisis", env.get_episode_history(), env.get_engine())
+    return score
+
+
 targets = {
     "clean_deploy": (run_clean_deploy, 0.95),
     "broken_pipeline": (run_broken_pipeline, 0.80),
     "judgment_call": (run_judgment_call_expert, 0.90),
     "cascading_failure": (run_cascading_failure, 0.70),
+    "capacity_crisis": (run_capacity_crisis, 0.60),
 }
 
 scores = {}

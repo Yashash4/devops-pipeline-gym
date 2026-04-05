@@ -30,6 +30,7 @@ TASK_SEEDS = {
     "broken_pipeline": 2002,
     "judgment_call": 3003,
     "cascading_failure": 4004,
+    "capacity_crisis": 5005,
 }
 
 TASK_MAX_STEPS = {
@@ -37,6 +38,7 @@ TASK_MAX_STEPS = {
     "broken_pipeline": 20,
     "judgment_call": 12,
     "cascading_failure": 15,
+    "capacity_crisis": 15,
 }
 
 # Goal suffixes that hint at investigation without giving away answers
@@ -44,6 +46,7 @@ _INVESTIGATION_HINTS = {
     "clean_deploy": " Use view_logs and view_config to inspect services before deploying.",
     "broken_pipeline": " Investigate service logs and configs to diagnose issues before acting.",
     "judgment_call": " Check service logs and configs to understand the incident before deciding.",
+    "capacity_crisis": " Inspect database-primary logs and config to find the bottleneck.",
 }
 
 
