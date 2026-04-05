@@ -150,14 +150,21 @@ def grade_judgment_call(episode_history, engine):
                 break
     score += max(0.0, 1.0 - resolution_step / 10.0) * 0.15
 
-    # No new issues introduced
+    # No new issues introduced (forgive issues the agent subsequently fixed)
     new_issues = 0
     for entry in episode_history:
         if entry.get("broke_healthy", False):
             new_issues += 1
-    if new_issues == 0:
+    # Expert path necessarily breaks web-frontend then fixes it — if web-frontend
+    # ended healthy AND auth was fixed, the breakage was handled, not reckless.
+    recovered_issues = 0
+    if deployed_hotfix and fixed_auth_config and web_fe:
+        if web_fe.health.value == "healthy" and web_fe.error_rate < 2.0:
+            recovered_issues = 1  # The expected web-frontend break was recovered
+    unrecovered = max(0, new_issues - recovered_issues)
+    if unrecovered == 0:
         score += 0.15
-    elif new_issues == 1:
+    elif unrecovered == 1:
         score += 0.05
 
     # System health

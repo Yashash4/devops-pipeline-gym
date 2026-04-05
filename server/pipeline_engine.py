@@ -321,6 +321,9 @@ class PipelineEngine:
         # Cross-metric compounding: metrics affect each other
         self._tick_metric_compounding()
 
+        # Non-linear tipping points — cliff effects
+        self._tick_tipping_points()
+
         return result
 
     # --- Cross-metric compounding ---------------------------------------------
@@ -343,6 +346,34 @@ class PipelineEngine:
                 svc.latency_ms = round(max(svc.latency_ms - 50, 20), 1)
             if svc.latency_ms < 200 and svc.error_rate < 1.0:
                 svc.error_rate = round(max(svc.error_rate - 0.5, 0.0), 2)
+
+    # --- Non-linear tipping points -------------------------------------------
+
+    def _tick_tipping_points(self):
+        """Non-linear tipping points — systems cliff instead of degrading linearly."""
+        for name, svc in self.services.items():
+            # CPU cliff: above 85% = exponential error growth
+            if svc.cpu_percent > 85:
+                overflow = svc.cpu_percent - 85
+                svc.error_rate = round(min(svc.error_rate + overflow * 0.2, 50.0), 2)
+
+            # Latency cliff: above 2000ms = rapid collapse
+            if svc.latency_ms > 2000:
+                svc.error_rate = round(min(svc.error_rate + 3.0, 50.0), 2)
+
+            # Health cliff: below 30% health = accelerating death spiral
+            base = 50.0 if svc.health == ServiceHealth.DEGRADED else (
+                100.0 if svc.health == ServiceHealth.HEALTHY else 0.0
+            )
+            err_penalty = min(svc.error_rate * 2, 30)
+            lat_penalty = min(max(0, svc.latency_ms - 200) / 10, 30)
+            health_pct = max(0, base - err_penalty - lat_penalty)
+            if health_pct < 30:
+                svc.error_rate = round(min(svc.error_rate * 1.3, 50.0), 2)
+
+            # Latency → CPU feedback (high latency = retries = more CPU)
+            if svc.latency_ms > 1500:
+                svc.cpu_percent = min(svc.cpu_percent + 3, 99)
 
     # --- Cascading failures ---------------------------------------------------
 
