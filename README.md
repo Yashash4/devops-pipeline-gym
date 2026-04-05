@@ -13,18 +13,58 @@ tags:
 
 # DevOps Pipeline Environment
 
-A **CI/CD deployment pipeline** environment for the OpenEnv platform where an AI agent manages deployments across interdependent microservices. The agent reads logs, interprets test results, edits configs, runs migrations, deploys services, and makes judgment calls under pressure.
+## Overview
 
-**Novel for OpenEnv**: No CI/CD environment exists on the Hub.
+This environment enables training AI agents for automated DevOps incident management — an AI SRE agent that can diagnose failures, manage deployments, and make judgment calls under production pressure. It simulates a realistic microservice architecture where services have interdependent health metrics, cascading failures propagate through dependency chains, and every action has trade-off consequences.
 
-## Motivation
+CI/CD deployment management is the most common engineering workflow at companies like Meta, Google, and Amazon. This environment captures the real decision-making complexity of production deployments: flaky tests vs real bugs, config errors that only surface in staging, cascading failures that spiral through dependency chains, and production incidents where every minute of downtime costs revenue. The agent must investigate before acting, fix root causes before symptoms, and accept that every intervention has side effects.
 
-CI/CD deployment management is the most common engineering workflow at companies like Meta, Google, and Amazon. This environment captures the real decision-making complexity of production deployments: flaky tests vs real bugs, config errors that only surface in staging, and production incidents where every minute costs revenue.
+This environment is useful for training RL agents to assist with deployment workflows, evaluating LLM reasoning under ambiguity and time pressure, and benchmarking investigation-before-action behavior. **Novel for OpenEnv**: No CI/CD pipeline environment exists on the Hub.
 
-This environment is useful for:
-- Training RL agents to assist with deployment workflows
-- Evaluating LLM reasoning under ambiguity and time pressure
-- Benchmarking agent investigation-before-action behavior
+## Service Dependency Graph
+
+```
+database-primary (PostgreSQL — root, no dependencies)
+├── auth-service (OAuth/JWT provider, depends on database-primary)
+│   ├── api-gateway (router/load balancer, depends on database-primary + auth-service)
+│   │   └── web-frontend (UI app, depends on api-gateway + auth-service)
+│   └── web-frontend
+└── cache-service (Redis cache, depends on database-primary)
+```
+
+Dependency chain: `database-primary → auth-service → api-gateway → web-frontend` and `database-primary → cache-service`. When an upstream service degrades, its dependents accumulate errors and latency each step.
+
+## Tasks
+
+### Task 1: Clean Deploy (Easy)
+Deploy 2 services (api-gateway v2.3.1, web-frontend v1.9.0) with all tests passing. No complications — tests basic pipeline execution and deployment sequencing.
+- **Max steps**: 15
+- **Services**: database-primary, auth-service, api-gateway, web-frontend
+- **Key challenge**: Execute staging → production deployment flow without breaking healthy services
+
+### Task 2: Broken Pipeline (Medium)
+Diagnose test failures, fix a config error, run a migration, and deploy 3 services. Not all test failures are blocking — the agent must distinguish flaky tests from real bugs.
+- **Max steps**: 20
+- **Services**: database-primary, auth-service, api-gateway, web-frontend, cache-service
+- **Key challenge**: Wrong Redis host in cache-service config, pending migration blocks api-gateway deploy, 3 test failures (2 flaky, 1 deprecated)
+
+### Task 3: The Judgment Call (Hard)
+Production incident — api-gateway at 1500ms latency and 12 errors/sec. A partially-tested hotfix (v2.3.2) is available. Multiple valid resolution paths with different risk/reward tradeoffs. Health degrades every step (time pressure).
+- **Max steps**: 12
+- **Services**: database-primary (under load), auth-service, api-gateway (degraded), web-frontend
+- **Key challenge**: Three valid paths — deploy hotfix + fix auth config (expert, highest score), rollback (safe but loses features), hotfix only (partial fix). Each has cascading consequences on web-frontend.
+
+### Task 4: Cascading Failure (Medium-Hard)
+Root cause analysis across a dependency chain. cache-service is down due to a config error (max_connections: 5), dragging api-gateway and web-frontend down via cascading failures. Fixing downstream services while root cause persists is futile.
+- **Max steps**: 15
+- **Services**: database-primary, auth-service, cache-service (root cause), api-gateway (degraded), web-frontend (degrading)
+- **Key challenge**: Identify root cause in cache-service config, fix it, then recover downstream services in dependency order
+
+### Task 5: Capacity Crisis (Medium-Hard)
+database-primary is approaching capacity limits under a traffic surge. CPU climbing, connection pool near saturation. The agent must act proactively before cascading failures begin — once the database goes down, recovery is extremely difficult.
+- **Max steps**: 15
+- **Services**: database-primary (stressed), auth-service, api-gateway, cache-service, web-frontend
+- **Key challenge**: Proactive intervention — increase max_connections and shared_buffers before tipping points trigger cascading collapse
 
 ## Action Space
 
@@ -32,80 +72,86 @@ This environment is useful for:
 
 | Action | Description | Required Fields |
 |--------|-------------|-----------------|
-| `view_pipeline` | View overall pipeline status | - |
-| `view_logs` | View service logs | `service_name` |
-| `view_config` | View service configuration | `service_name` |
-| `edit_config` | Modify config key-value pairs | `service_name`, `config_edits` |
-| `run_migration` | Execute a database migration | `migration_name` |
-| `deploy` | Deploy service to staging/prod | `service_name`, `target_version` |
-| `rollback` | Rollback service to previous version | `service_name` |
-| `approve` | Approve and finalize deployment | `reason` |
-| `abort` | Abort deployment | `reason` |
+| `view_pipeline` | View overall pipeline status and service summary | — |
+| `view_logs` | View recent logs for a service (reveals CPU/memory) | `service_name` |
+| `view_config` | View current config key-value pairs | `service_name` |
+| `edit_config` | Modify config key-value pairs (causes restart latency spike) | `service_name`, `config_edits` |
+| `run_migration` | Execute a pending database migration | `migration_name` |
+| `deploy` | Deploy service version to staging, then promote to production | `service_name`, `target_version` |
+| `rollback` | Rollback service to previous version (25% regression risk) | `service_name` |
+| `approve` | Approve current state and end episode | `reason` |
+| `abort` | Abort deployment and end episode | `reason` |
 
 ## Observation Space
 
-`PipelineObservation` provides full system state:
-- **task_description** and **goal**: Natural language context
-- **services**: List of `ServiceStatus` (health, version, CPU, memory, error rate, latency)
-- **pipeline**: Current stage, test results, build logs
-- **migrations**: Pending/applied migrations
-- **active_alerts**: Critical/warning alerts
-- **available_actions**: Context-sensitive valid actions
-- **last_action_result/error**: Feedback from previous step
-- **config_snapshot**: Config key-value pairs (when viewing/editing)
+`PipelineObservation` provides the agent's view of the system:
 
-## Tasks
-
-### Task 1: "Clean Deploy" (Easy)
-Deploy 2 services with all tests passing. No complications. Tests execution and basic pipeline management.
-- **Max steps**: 15
-- **Services**: database-primary (healthy), auth-service (healthy), api-gateway (v2.3.0 -> v2.3.1), web-frontend (v1.8.0 -> v1.9.0)
-- **Dependency graph**: database-primary <- auth-service, database-primary + auth-service <- api-gateway, api-gateway + auth-service <- web-frontend
-
-### Task 2: "Broken Pipeline" (Medium)
-Diagnose test failures, fix a config error, run a migration, and deploy 3 services. Not all test failures are blocking -- the agent must distinguish flaky tests from real bugs.
-- **Max steps**: 20
-- **Services**: database-primary (healthy), auth-service (healthy), api-gateway, web-frontend, cache-service
-- **Dependency graph**: database-primary <- auth-service, database-primary <- cache-service, database-primary + auth-service <- api-gateway, api-gateway + auth-service <- web-frontend
-- **Challenges**: 3 test failures (2 flaky, 1 deprecated), wrong Redis host in cache-service config, pending migration blocks api-gateway
-
-### Task 3: "The Judgment Call" (Hard)
-Production incident with api-gateway at 1500ms latency and 12 errors/sec. A partially-tested hotfix is available. Multiple valid resolution paths with different risk/reward tradeoffs. Health degrades every step.
-- **Max steps**: 12
-- **Services**: database-primary (under load, CPU 72%), auth-service (healthy, warns about HS256->RS256 transition), api-gateway (degraded), web-frontend (healthy)
-- **Dilemma**: Deploy untested hotfix (breaks web-frontend auth) vs rollback (loses web-frontend API endpoint) — every path has cascading consequences
-- **Three valid resolution paths**: deploy hotfix + fix auth config (expert path), rollback (safe), or hotfix only (partial fix). Each scores differently.
-
-### Task 4: "Cascading Failure" (Medium-Hard)
-Root cause analysis across a dependency chain. cache-service is down (config error), dragging api-gateway and web-frontend down via cascading failures. Agent must identify and fix the root cause first — fixing downstream services while the root cause persists is futile.
-- **Max steps**: 15
-- **Services**: database-primary (healthy), auth-service (healthy), cache-service (root cause), api-gateway (degraded), web-frontend (degrading)
-- **Challenge**: Fix cache-service config (max_connections: 5 -> 50), deploy cache-service, then recover downstream services in order
+- **summary**: One-line status — highlights degraded/down services at a glance (e.g., `"WARNING: api-gateway degraded (lat=1500ms, err=12.0/s)"` or `"All services nominal."`)
+- **services**: List of `ServiceStatus` — name, health, version, error_rate, latency, active_connections, last_deploy_timestamp. **Partial observability**: CPU and memory are hidden (show 0.0) until the agent runs `view_logs` for that service.
+- **task_description** and **goal**: Natural language context for the current task
+- **available_actions**: Context-sensitive list of valid action types
+- **last_action_result / last_action_error**: Feedback from the previous step
+- **pipeline**: Current stage, commit SHA, test pass/fail counts, build logs snippet
+- **migrations**: Pending and applied migrations
+- **active_alerts**: Critical/warning/info alerts with timestamps
+- **config_snapshot**: Config key-value pairs (populated after `view_config` or `edit_config`)
+- **step_number / max_steps**: Current progress
 
 ## Reward Design
 
-Outcome-based rewards (never procedure-based):
-- **+0.15** per service successfully deployed to production
-- **+0.05** per service verified in staging
-- **+0.02** for first-time investigation actions (view_pipeline, view_logs, view_config)
-- **+0.005** per 1% system health improvement
-- **-0.30** for breaking a healthy service (catastrophic penalty)
-- **-0.01** for true no-ops (not investigation actions)
+Dense per-step reward that creates a learnable gradient for RL training. Investigation actions give a small positive signal (+0.02 for first-time views). Health improvements give proportional reward via system health delta (+0.005 per 1% improvement). Breaking healthy services is heavily penalized (-0.30). Repeated identical actions are penalized (-0.01 to -0.02). All grading is outcome-based — no procedure-based criteria (e.g., no bonus for "deploying to staging before production"). Rewards are bounded [-0.35, +0.20] per step to prevent training instability.
 
-Actions have trade-off effects: deploys cause temporary CPU/latency spikes, rollbacks risk regression, config edits cause restart latency. Cross-metric compounding: degraded metrics worsen each other (error->CPU->latency spirals), healthy metrics help each other recover.
+| Signal | Reward | Condition |
+|--------|--------|-----------|
+| Service deployed to production | +0.15 | Service reaches prod successfully |
+| Service verified in staging | +0.05 | Staging health check passes |
+| Investigation (first-time) | +0.02 | view_pipeline, view_logs, view_config |
+| Health improvement | +0.005/1% | System health delta |
+| Broke healthy service | -0.30 | Service went from healthy to degraded/down |
+| Repeated investigation | -0.01 | Same view action on same target |
+| True no-op | -0.01 | Action produced no state change |
 
 ## Baseline Scores
 
 Model: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Router
 
-| Task | Steps | Score |
-|------|-------|-------|
-| clean_deploy | 6 | 0.585 |
-| broken_pipeline | 6 | 0.482 |
-| judgment_call | 6 | 0.184 |
-| cascading_failure | 8 | 0.280 |
+| Task | Difficulty | Random (avg) | LLM Baseline | Optimal |
+|------|-----------|-------------|-------------|---------|
+| clean_deploy | Easy | 0.459 | 0.585 | 0.947 |
+| broken_pipeline | Medium | 0.244 | 0.482 | 0.890 |
+| judgment_call | Hard | 0.380 | 0.184 | 0.950 |
+| cascading_failure | Med-Hard | 0.218 | 0.280 | 0.883 |
+| capacity_crisis | Med-Hard | 0.570 | 0.280 | 0.524 |
 
-Scores from Qwen/Qwen2.5-72B-Instruct via HuggingFace Router.
+Random scores from 10 episodes per task with uniform random action selection. LLM baseline from single inference run. Optimal scores from scripted expert trajectories.
+
+## Example Episode Trajectory
+
+**Task: broken_pipeline** — diagnose and fix a broken deployment pipeline.
+
+```
+Step 1: view_logs("cache-service")       → reward +0.02  (investigation bonus, reveals Redis config error)
+Step 2: edit_config("cache-service",
+          redis.host → "redis-prod...")   → reward +0.10  (health improvement from fixing config)
+Step 3: deploy("api-gateway", "v2.3.1")  → reward +0.05  (staging verified)
+Step 4: deploy("api-gateway", "v2.3.1")  → reward +0.15  (promoted to production)
+Step 5: approve("All services healthy")  → reward +0.03  (episode complete)
+```
+
+## Environment Features
+
+- 5 microservices with realistic dependency graph
+- Stochastic simulation with seeded RNG for full reproducibility
+- Realistic production logs (Java/Node stack traces, timestamps, red herrings)
+- Partial observability (CPU/memory hidden until investigated via view_logs)
+- Cascading failures propagate through dependency chain each step
+- Cross-metric compounding (error → CPU → latency spirals, and reverse recovery)
+- Non-linear tipping points (CPU cliff at 85%, latency cliff at 2000ms)
+- Trade-off effects on every action (deploy → CPU spike, rollback → 25% regression risk, config edit → restart latency)
+- Time pressure on incident tasks (health degrades each step in judgment_call)
+- Multi-path task design (judgment_call has 3 valid resolution paths with different scores)
+- Dense per-step reward with anti-reward-hacking safeguards (bounded, no procedure bonuses)
+- Observation summary field for quick triage
 
 ## Setup
 
@@ -113,13 +159,14 @@ Scores from Qwen/Qwen2.5-72B-Instruct via HuggingFace Router.
 # Install dependencies
 uv sync
 
-# Build Docker image
-docker build -t devops-pipeline-env .
+# Run locally (without Docker)
+uv run python -m uvicorn server.app:app --host 0.0.0.0 --port 8000
 
-# Run locally
+# Build and run with Docker
+docker build -t devops-pipeline-env .
 docker run -p 8000:8000 devops-pipeline-env
 
-# Test
+# Test reset endpoint
 curl -X POST -H "Content-Type: application/json" -d '{}' http://localhost:8000/reset
 
 # Open web UI
@@ -129,41 +176,21 @@ curl -X POST -H "Content-Type: application/json" -d '{}' http://localhost:8000/r
 export HF_TOKEN=your_token_here
 uv run inference.py
 
-# Deploy to HuggingFace Spaces
+# Validate and deploy
+openenv validate
 openenv push --repo-id your-username/devops-pipeline-env
 ```
 
 ## API Endpoints
 
-- `POST /reset` - Reset environment (new episode)
-- `POST /step` - Execute an action
-- `GET /state` - Get current state
-- `GET /tasks` - List tasks and action schema
-- `GET /health` - Health check
-- `POST /baseline` - Pre-recorded baseline scores
-- `POST /grader` - Score current episode
-- `WS /ws` - WebSocket for persistent sessions
-- `GET /web` - Gradio web interface
-
-## Project Structure
-
-```
-devops_pipeline_env/
-├── __init__.py              # Exports: PipelineAction, PipelineObservation, DevopsPipelineEnv
-├── models.py                # Pydantic models (extends OpenEnv Action/Observation)
-├── client.py                # DevopsPipelineEnv(EnvClient)
-├── openenv.yaml             # Environment metadata
-├── pyproject.toml           # Package config + dependencies
-├── inference.py             # LLM inference script (root)
-├── Dockerfile               # Container image (root)
-├── requirements.txt         # Server dependencies (root)
-├── README.md                # This file
-└── server/
-    ├── __init__.py
-    ├── app.py               # FastAPI app with create_app()
-    ├── pipeline_environment.py  # Main Environment class
-    ├── pipeline_engine.py   # Service state machine + simulation
-    ├── scenarios.py         # Task 1-4 scenario definitions
-    ├── graders.py           # 4 deterministic graders (0.0-1.0)
-    └── rewards.py           # Outcome-based reward calculator
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/reset` | POST | Reset environment (new episode) |
+| `/step` | POST | Execute an action, returns observation |
+| `/state` | GET | Get current environment state |
+| `/tasks` | GET | List available tasks and action schema |
+| `/health` | GET | Health check |
+| `/baseline` | POST | Pre-recorded LLM baseline scores |
+| `/grader` | POST | Score the current active episode |
+| `/ws` | WS | WebSocket for persistent sessions |
+| `/web` | GET | Gradio web interface |
