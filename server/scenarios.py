@@ -85,6 +85,28 @@ class CleanDeployScenario(Scenario):
             "2026-04-01T09:58:10.334Z INFO  [database-primary] Connection pool: 12/50 active. Query throughput: 1.2k/s.",
         ]
 
+        engine.services["auth-service"] = ServiceState(
+            name="auth-service",
+            version="v3.1.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "token_ttl_seconds": "3600",
+                "jwt_algorithm": "RS256",
+                "rate_limit_per_minute": "1000",
+                "cert_expiry": "2026-12-01",
+            },
+            dependencies=["database-primary"],
+            latency_ms=12.0,
+            error_rate=0.1,
+            cpu=25.0,
+            memory=40.0,
+        )
+        engine.services["auth-service"].prod_deployed = True
+        engine.services["auth-service"].logs = [
+            "2026-04-01T09:58:10.001Z INFO  [auth-service] OAuth2 provider started. Algorithm: RS256. TTL: 3600s.",
+            "2026-04-01T09:58:10.112Z INFO  [auth-service] Certificate valid until 2026-12-01. Rate limit: 1000/min.",
+        ]
+
         engine.services["api-gateway"] = ServiceState(
             name="api-gateway",
             version="v2.3.0",
@@ -94,7 +116,7 @@ class CleanDeployScenario(Scenario):
                 "cache.ttl": "300",
                 "log.level": "info",
             },
-            dependencies=["database-primary"],
+            dependencies=["database-primary", "auth-service"],
             latency_ms=45.0,
             error_rate=0.1,
             cpu=35.0,
@@ -119,7 +141,7 @@ class CleanDeployScenario(Scenario):
                 "cdn.enabled": "true",
                 "log.level": "info",
             },
-            dependencies=["api-gateway"],
+            dependencies=["api-gateway", "auth-service"],
             latency_ms=30.0,
             error_rate=0.05,
             cpu=28.0,
@@ -186,6 +208,28 @@ class BrokenPipelineScenario(Scenario):
             "2026-04-01T10:00:00.334Z INFO  [database-primary] Connection pool: 15/50 active. Query throughput: 1.4k/s.",
         ]
 
+        engine.services["auth-service"] = ServiceState(
+            name="auth-service",
+            version="v3.1.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "token_ttl_seconds": "3600",
+                "jwt_algorithm": "RS256",
+                "rate_limit_per_minute": "1000",
+                "cert_expiry": "2026-12-01",
+            },
+            dependencies=["database-primary"],
+            latency_ms=15.0,
+            error_rate=0.2,
+            cpu=28.0,
+            memory=40.0,
+        )
+        engine.services["auth-service"].prod_deployed = True
+        engine.services["auth-service"].logs = [
+            "2026-04-01T10:00:00.501Z INFO  [auth-service] OAuth2 provider started. Algorithm: RS256. TTL: 3600s.",
+            "2026-04-01T10:00:00.612Z INFO  [auth-service] Certificate valid until 2026-12-01. Rate limit: 1000/min.",
+        ]
+
         engine.services["api-gateway"] = ServiceState(
             name="api-gateway",
             version="v2.3.0",
@@ -195,7 +239,7 @@ class BrokenPipelineScenario(Scenario):
                 "cache.ttl": "300",
                 "log.level": "info",
             },
-            dependencies=["database-primary"],
+            dependencies=["database-primary", "auth-service"],
             latency_ms=50.0,
             error_rate=0.2,
             cpu=40.0,
@@ -240,7 +284,7 @@ class BrokenPipelineScenario(Scenario):
                 "cdn.enabled": "true",
                 "log.level": "info",
             },
-            dependencies=["api-gateway"],
+            dependencies=["api-gateway", "auth-service"],
             latency_ms=30.0,
             error_rate=0.05,
             cpu=28.0,
@@ -367,6 +411,28 @@ class JudgmentCallScenario(Scenario):
             "2026-04-01T11:44:51.001Z INFO  [database-primary] Slow query log: SELECT * FROM sessions WHERE expires_at < NOW() -- 850ms.",
         ]
 
+        engine.services["auth-service"] = ServiceState(
+            name="auth-service",
+            version="v3.1.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "token_ttl_seconds": "3600",
+                "jwt_algorithm": "RS256",
+                "rate_limit_per_minute": "1000",
+                "cert_expiry": "2026-12-01",
+            },
+            dependencies=["database-primary"],
+            latency_ms=20.0,
+            error_rate=0.3,
+            cpu=35.0,
+            memory=40.0,
+        )
+        engine.services["auth-service"].prod_deployed = True
+        engine.services["auth-service"].logs = [
+            "2026-04-01T11:44:50.001Z INFO  [auth-service] OAuth2 provider running. Algorithm: RS256. TTL: 3600s.",
+            "2026-04-01T11:44:51.334Z WARN  [auth-service] Hotfix v2.3.2 switches api-gateway auth middleware from HS256 to RS256. Downstream services must update token validation.",
+        ]
+
         engine.services["api-gateway"] = ServiceState(
             name="api-gateway",
             version="v2.3.1",
@@ -377,7 +443,7 @@ class JudgmentCallScenario(Scenario):
                 "cache.ttl": "300",
                 "log.level": "warn",
             },
-            dependencies=["database-primary"],
+            dependencies=["database-primary", "auth-service"],
             latency_ms=1500.0,
             error_rate=12.0,
             cpu=85.0,
@@ -408,7 +474,7 @@ class JudgmentCallScenario(Scenario):
                 "cdn.enabled": "true",
                 "log.level": "info",
             },
-            dependencies=["api-gateway"],
+            dependencies=["api-gateway", "auth-service"],
             latency_ms=30.0,
             error_rate=0.5,
             cpu=28.0,
@@ -599,6 +665,28 @@ class CascadingFailureScenario(Scenario):
             "2026-04-01T12:00:06.001Z INFO  [cache-service] com.pipeline.ops.ConfigAdvisor — Recommended: increase redis.max_connections from 5 to at least 50 for production workload. Current setting is development default.",
         ]
 
+        engine.services["auth-service"] = ServiceState(
+            name="auth-service",
+            version="v3.1.0",
+            health=ServiceHealth.HEALTHY,
+            config={
+                "token_ttl_seconds": "3600",
+                "jwt_algorithm": "RS256",
+                "rate_limit_per_minute": "1000",
+                "cert_expiry": "2026-12-01",
+            },
+            dependencies=["database-primary"],
+            latency_ms=12.0,
+            error_rate=0.1,
+            cpu=25.0,
+            memory=40.0,
+        )
+        engine.services["auth-service"].prod_deployed = True
+        engine.services["auth-service"].logs = [
+            "2026-04-01T12:00:00.501Z INFO  [auth-service] OAuth2 provider started. Algorithm: RS256. TTL: 3600s.",
+            "2026-04-01T12:00:00.612Z INFO  [auth-service] Certificate valid until 2026-12-01. Rate limit: 1000/min.",
+        ]
+
         # DOWNSTREAM 1: api-gateway depends on cache-service, degrading
         engine.services["api-gateway"] = ServiceState(
             name="api-gateway",
@@ -610,7 +698,7 @@ class CascadingFailureScenario(Scenario):
                 "cache.backend": "redis",
                 "log.level": "info",
             },
-            dependencies=["cache-service", "database-primary"],
+            dependencies=["cache-service", "database-primary", "auth-service"],
             latency_ms=300.0,
             error_rate=5.0,
             cpu=60.0,
@@ -639,7 +727,7 @@ class CascadingFailureScenario(Scenario):
                 "cdn.enabled": "true",
                 "log.level": "info",
             },
-            dependencies=["api-gateway"],
+            dependencies=["api-gateway", "auth-service"],
             latency_ms=80.0,
             error_rate=0.5,
             cpu=30.0,
