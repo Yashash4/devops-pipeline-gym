@@ -819,7 +819,7 @@ class CapacityCrisisScenario(Scenario):
             dependencies=[],
             latency_ms=180.0,
             error_rate=3.2,
-            cpu=72.0,
+            cpu=60.0,
             memory=70.0,
         )
         engine.services["database-primary"].prod_deployed = True

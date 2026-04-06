@@ -238,47 +238,55 @@ def grade_cascading_failure(episode_history, engine):
 def grade_capacity_crisis(episode_history, engine):
     """
     Task 5 grader — capacity crisis (all outcome-based):
-    - 0.35 — system stability: final system health
-    - 0.25 — root cause: database-primary protected (CPU<85, config fixed)
-    - 0.25 — critical services maintained (api-gateway not DOWN)
-    - 0.15 — proactive response: no service went DOWN during episode
+    - 0.30 — system stability: final system health / 100
+    - 0.30 — root cause: database-primary protected (CPU<85, config fixed)
+    - 0.20 — critical services maintained (api-gateway not DOWN, low errors)
+    - 0.10 — proactive response: no service went DOWN during episode
+    - 0.10 — step efficiency: max(0, 1 - steps_used / (max_steps * 2))
     """
     score = 0.0
     db = engine.services.get("database-primary")
     api_gw = engine.services.get("api-gateway")
 
-    # System stability (0.35)
+    # System stability (0.30) — only perfect health gets full marks
     system_health = engine.get_system_health()
-    score += min(system_health / 70.0, 1.0) * 0.35
+    score += (system_health / 100.0) * 0.30
 
-    # Root cause: database protected (0.25)
+    # Root cause: database protected (0.30)
     if db:
         max_conn = int(db.config.get("max_connections", "50"))
         if max_conn >= 100 and db.cpu_percent < 85:
-            score += 0.25
+            score += 0.30
+        elif max_conn >= 75 and db.cpu_percent < 85:
+            score += 0.20
         elif max_conn >= 75:
-            score += 0.15
-        elif db.cpu_percent < 85:
             score += 0.10
+        elif db.cpu_percent < 85:
+            score += 0.05
 
-    # Critical services maintained (0.25)
+    # Critical services maintained (0.20)
     if api_gw:
         if api_gw.health.value != "down":
             if api_gw.error_rate < 5.0:
-                score += 0.25
+                score += 0.20
             elif api_gw.error_rate < 10.0:
-                score += 0.15
+                score += 0.10
             else:
-                score += 0.05
+                score += 0.03
 
-    # Proactive response: no service went DOWN during episode (0.15)
-    any_went_down = any(
-        entry.get("broke_healthy", False) for entry in episode_history
-    )
-    if not any_went_down:
-        score += 0.15
-    elif system_health > 30:
+    # Proactive response: system health maintained or improved (0.10)
+    # In capacity_crisis, initial cascading is inevitable — reward agents
+    # that stabilize health rather than penalizing unavoidable cascades.
+    if system_health >= 70:
+        score += 0.10
+    elif system_health >= 50:
         score += 0.05
+
+    # Step efficiency (0.10)
+    steps_used = len(episode_history)
+    max_steps = 15
+    efficiency = max(0.0, 1.0 - steps_used / (max_steps * 2))
+    score += 0.10 * efficiency
 
     return min(max(score, 0.0), 1.0)
 

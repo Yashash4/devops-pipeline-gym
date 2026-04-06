@@ -121,7 +121,7 @@ Model: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Router
 | broken_pipeline | Medium | 0.244 | 0.482 | 0.890 |
 | judgment_call | Hard | 0.380 | 0.184 | 0.950 |
 | cascading_failure | Med-Hard | 0.218 | 0.280 | 0.883 |
-| capacity_crisis | Med-Hard | 0.570 | 0.280 | 0.524 |
+| capacity_crisis | Med-Hard | 0.471 | 0.280 | 0.634 |
 
 Random scores from 10 episodes per task with uniform random action selection. LLM baseline from single inference run. Optimal scores from scripted expert trajectories.
 

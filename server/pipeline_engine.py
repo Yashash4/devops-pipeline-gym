@@ -716,8 +716,8 @@ class PipelineEngine:
             api_gw = self.services.get("api-gateway")
             # Time pressure only while connection pool bottleneck persists
             if db and self.scenario.check_config_error("database-primary", db.config):
-                db.cpu_percent = min(db.cpu_percent + 3, 99)
-                db.latency_ms = round(db.latency_ms + 20, 1)
+                db.cpu_percent = min(db.cpu_percent + 2, 99)
+                db.latency_ms = round(db.latency_ms + 15, 1)
             # api-gateway degrades only while db bottleneck persists
             if (api_gw and api_gw.health == ServiceHealth.DEGRADED
                     and db and self.scenario.check_config_error("database-primary", db.config)):
