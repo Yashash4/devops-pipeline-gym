@@ -72,6 +72,13 @@ STRATEGY:
 - Actions have side effects: deploys spike CPU, rollbacks risk regression, config changes cause restart latency.
 - In capacity scenarios, act proactively — don't wait for failures.
 
+TASK-SPECIFIC GUIDANCE:
+- clean_deploy: Deploy api-gateway then web-frontend. No complications expected.
+- broken_pipeline: Check cache-service logs/config first — Redis host is usually wrong. Run the pending migration before deploying api-gateway.
+- judgment_call: INCIDENT — check api-gateway logs first. Three options: (1) BEST: deploy hotfix v2.3.2 to api-gateway THEN edit web-frontend config api.auth_version to "v2", (2) SAFE: rollback api-gateway, (3) RISKY: deploy hotfix without fixing auth. Option 1 scores highest.
+- cascading_failure: Find ROOT CAUSE — check cache-service first, it's usually the source. Fix its config (max_connections too low), deploy it, then recover downstream services.
+- capacity_crisis: Check database-primary IMMEDIATELY — connection pool nearly full. Increase max_connections to 100+. Act FAST before tipping points cascade.
+
 You must respond with a SINGLE valid JSON object matching the PipelineAction schema.
 
 Example responses:
@@ -88,15 +95,68 @@ Respond with ONLY the JSON object. No explanation, no markdown.
 RETRY_PROMPT = 'Respond with ONLY a JSON action. Example: {"action_type": "view_pipeline"}'
 
 
+def summarize_observation(obs_dict):
+    """Compress observation so LLM can actually parse it."""
+    summary = obs_dict.get("summary", "")
+    task = obs_dict.get("task_description", "")
+    goal = obs_dict.get("goal", "")
+    last_result = obs_dict.get("last_action_result", "")
+    last_error = obs_dict.get("last_action_error", "")
+    step = obs_dict.get("step_number", 0)
+    max_steps = obs_dict.get("max_steps", 15)
+
+    services_compact = []
+    for svc in obs_dict.get("services", []):
+        name = svc.get("name", "?")
+        health = svc.get("health", "?")
+        err = svc.get("error_rate", 0)
+        lat = svc.get("request_latency_ms", 0)
+        cpu = svc.get("cpu_percent", 0)
+        line = f"{name}: {health}"
+        if health != "healthy":
+            line += f" (err={err:.1f}/s, lat={lat:.0f}ms)"
+        if cpu > 70:
+            line += f" [CPU={cpu:.0f}%]"
+        services_compact.append(line)
+
+    alerts = [
+        f"[{a.get('severity','')}] {a.get('message','')}"
+        for a in obs_dict.get("active_alerts", [])[:3]
+    ]
+    available = obs_dict.get("available_actions", [])
+    config = obs_dict.get("config_snapshot", {})
+
+    parts = []
+    if step == 0:
+        parts.append(f"TASK: {task}")
+        parts.append(f"GOAL: {goal}")
+    parts.append(f"Step {step}/{max_steps}")
+    if summary:
+        parts.append(f"Status: {summary}")
+    parts.append(f"Services: {'; '.join(services_compact)}")
+    if alerts:
+        parts.append(f"Alerts: {'; '.join(alerts)}")
+    if config:
+        parts.append(f"Config: {config}")
+    if last_result:
+        parts.append(f"Last result: {last_result[:300]}")
+    if last_error:
+        parts.append(f"Error: {last_error[:200]}")
+    parts.append(f"Available actions: {', '.join(available)}")
+
+    return "\n".join(p for p in parts if p)
+
+
 def build_user_message(obs, investigated):
-    """Build user message for the current step's observation."""
-    current_obs = json.dumps(obs.model_dump(), indent=2, default=str, sort_keys=True)
+    """Build user message with compact observation for LLM."""
+    obs_dict = obs.model_dump(mode="json")
+    compact = summarize_observation(obs_dict)
 
     inv_block = ""
     if investigated:
         inv_block = "\n\nINVESTIGATED: " + ", ".join(sorted(investigated))
 
-    return f"CURRENT STATE:\n{current_obs}{inv_block}\n\nWhat is your next action?"
+    return f"CURRENT STATE:\n{compact}{inv_block}\n\nWhat is your next action?"
 
 
 def build_messages(system_prompt, conversation, current_user_msg):
