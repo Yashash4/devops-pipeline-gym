@@ -331,6 +331,8 @@ class PipelineEngine:
 
     def _tick_metric_compounding(self):
         """Metrics compound on each other — creates realistic spirals and recovery."""
+        if self.scenario.task_name == "clean_deploy":
+            return
         for name, svc in self.services.items():
             # Degradation spirals (moderate — should not kill episodes in <5 steps)
             if svc.error_rate > 15.0:
@@ -352,6 +354,8 @@ class PipelineEngine:
 
     def _tick_tipping_points(self):
         """Non-linear tipping points — systems cliff instead of degrading linearly."""
+        if self.scenario.task_name == "clean_deploy":
+            return
         for name, svc in self.services.items():
             # CPU cliff: above 85% = exponential error growth
             if svc.cpu_percent > 85:

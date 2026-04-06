@@ -20,7 +20,6 @@ from devops_pipeline_env.models import (
     ServiceHealth,
     ServiceStatus,
 )
-from server.graders import grade_task
 from server.pipeline_engine import PipelineEngine
 from server.rewards import calculate_reward
 from server.scenarios import load_scenario

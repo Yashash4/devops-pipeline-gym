@@ -70,7 +70,7 @@ def get_tasks():
 @app.get("/health")
 def health_check():
     """Health check endpoint."""
-    return {"status": "ok"}
+    return {"status": "healthy"}
 
 
 @app.post("/baseline")
