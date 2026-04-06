@@ -121,7 +121,7 @@ Model: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Router
 | broken_pipeline | Medium | 0.482 | 0.890 | +0.408 |
 | judgment_call | Hard | 0.184 | 0.935 | +0.751 |
 | cascading_failure | Med-Hard | 0.280 | 0.883 | +0.603 |
-| capacity_crisis | Med-Hard | 0.280 | 0.634 | +0.354 |
+| capacity_crisis | Med-Hard | 0.250 | 0.634 | +0.384 |
 
 LLM baselines from initial inference run. Optimal scores from scripted expert trajectories. The large gap between LLM baseline and optimal demonstrates significant room for RL training improvement — the environment produces meaningful reward signal across the full skill spectrum.
 

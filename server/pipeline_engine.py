@@ -90,7 +90,7 @@ class ServiceState:
         self.logs.append(
             f"[DEPLOY] Deployed {self.name} {version} to staging. Health check: PASSED."
         )
-        return f"Deployed {self.name} {version} to staging. Health check: PASSED."
+        return f"Deployed {self.name} {version} to STAGING. Staging verified. Deploy same service+version again to PROMOTE TO PRODUCTION."
 
     def deploy_to_production(self, version):
         """Promote to production."""

@@ -82,7 +82,7 @@ async def run_baseline():
             "broken_pipeline": 0.482,
             "judgment_call": 0.184,
             "cascading_failure": 0.280,
-            "capacity_crisis": 0.280,
+            "capacity_crisis": 0.250,
         },
         "model": "Qwen/Qwen2.5-72B-Instruct",
         "note": "Recorded from inference.py run on 2026-04-04.",

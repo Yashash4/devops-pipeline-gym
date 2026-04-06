@@ -50,7 +50,9 @@ class CleanDeployScenario(Scenario):
             task_description=(
                 "You are managing a CI/CD pipeline. Two services need to be "
                 "deployed to production: api-gateway v2.3.1 and web-frontend "
-                "v1.9.0. All tests pass. No migrations required."
+                "v1.9.0. All tests pass. No migrations required. "
+                "Deploy each service by calling deploy twice: first deploys "
+                "to staging, second promotes to production."
             ),
             goal=(
                 "Deploy both services to production with zero downtime. "
