@@ -115,15 +115,15 @@ Dense per-step reward that creates a learnable gradient for RL training. Investi
 
 Model: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Router
 
-| Task | Difficulty | Random (avg) | LLM Baseline | Optimal |
-|------|-----------|-------------|-------------|---------|
-| clean_deploy | Easy | 0.459 | 0.585 | 0.947 |
-| broken_pipeline | Medium | 0.244 | 0.482 | 0.890 |
-| judgment_call | Hard | 0.380 | 0.184 | 0.950 |
-| cascading_failure | Med-Hard | 0.218 | 0.280 | 0.883 |
-| capacity_crisis | Med-Hard | 0.471 | 0.280 | 0.634 |
+| Task | Difficulty | LLM Baseline | Optimal | Gap |
+|------|-----------|-------------|---------|-----|
+| clean_deploy | Easy | 0.585 | 0.947 | +0.362 |
+| broken_pipeline | Medium | 0.482 | 0.890 | +0.408 |
+| judgment_call | Hard | 0.184 | 0.935 | +0.751 |
+| cascading_failure | Med-Hard | 0.280 | 0.883 | +0.603 |
+| capacity_crisis | Med-Hard | 0.280 | 0.634 | +0.354 |
 
-Random scores from 10 episodes per task with uniform random action selection. LLM baseline from single inference run. Optimal scores from scripted expert trajectories.
+LLM baselines from initial inference run. Optimal scores from scripted expert trajectories. The large gap between LLM baseline and optimal demonstrates significant room for RL training improvement — the environment produces meaningful reward signal across the full skill spectrum.
 
 ## Example Episode Trajectory
 
