@@ -54,9 +54,10 @@ class ServiceState:
         self.target_version = version
 
         # 8% chance of transient staging failure on first attempt
-        # Skip transient failure during incidents (health already degraded/down)
-        transient_roll = self._rng.random()
-        if not self.staging_verified and self.health == ServiceHealth.HEALTHY and transient_roll < 0.08:
+        # Skip for clean_deploy (easy task) and during incidents (health already degraded/down)
+        transient_roll = self._rng.random()  # always consume RNG for determinism
+        is_clean_deploy = hasattr(self, '_task_name') and self._task_name == "clean_deploy"
+        if not is_clean_deploy and not self.staging_verified and self.health == ServiceHealth.HEALTHY and transient_roll < 0.08:
             self.staging_deployed = True  # deployed but not verified
             self.logs.append(
                 f"[DEPLOY] Deployed {self.name} {version} to staging. "
@@ -151,8 +152,8 @@ class ServiceState:
         # Trade-off: deploy causes temporary CPU/latency spike (warmup load)
         # Clean deploy tasks get reduced spikes — they should be clean
         if hasattr(self, '_task_name') and self._task_name == "clean_deploy":
-            self.cpu_percent = min(self.cpu_percent + 5, 99)
-            self.latency_ms += round(50 * self._rng.uniform(0.8, 1.2), 1)
+            self.cpu_percent = min(self.cpu_percent + 3, 99)
+            self.latency_ms += round(30 * self._rng.uniform(0.8, 1.2), 1)
         else:
             self.cpu_percent = min(self.cpu_percent + 15, 99)
             self.latency_ms += round(200 * self._rng.uniform(0.8, 1.2), 1)
