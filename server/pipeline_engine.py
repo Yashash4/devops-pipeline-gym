@@ -728,3 +728,11 @@ class PipelineEngine:
                     and db and self.scenario.check_config_error("database-primary", db.config)):
                 api_gw.latency_ms = round(min(api_gw.latency_ms + 30, 5000), 1)
                 api_gw.error_rate = round(min(api_gw.error_rate + 0.5, 50.0), 2)
+
+        elif task == "random_incident":
+            failing = getattr(self.scenario, '_failing_service', None)
+            if failing:
+                svc = self.services.get(failing)
+                if svc and svc.health == ServiceHealth.DEGRADED:
+                    svc.error_rate = round(min(svc.error_rate + 0.5, 50.0), 2)
+                    svc.latency_ms = round(min(svc.latency_ms + 30, 5000), 1)

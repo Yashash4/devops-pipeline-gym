@@ -66,6 +66,21 @@ database-primary is approaching capacity limits under a traffic surge. CPU climb
 - **Services**: database-primary (stressed), auth-service, api-gateway, cache-service, web-frontend
 - **Key challenge**: Proactive intervention — increase max_connections and shared_buffers before tipping points trigger cascading collapse
 
+### Task 6: Random Incident (Variable — Procedural Generation)
+Procedurally generated incident from a seed. The failing service (api-gateway, cache-service, auth-service, or web-frontend), failure type (config_error, degraded_performance, or capacity_limit), and severity (moderate or severe) are all randomized. Different seeds produce different scenarios — infinite variation for curriculum learning.
+- **Max steps**: 15
+- **Services**: All 5 (one randomly failing)
+- **Key challenge**: Read the task description to identify the failing service and failure type, investigate, diagnose, and fix — with no prior knowledge of what's broken
+
+## Procedural Generation
+
+The `random_incident` task generates unique scenarios from a seed, enabling:
+- **Curriculum learning**: Start with easy seeds, progressively increase difficulty
+- **Generalization testing**: Verify agents handle novel failure combinations
+- **Infinite training data**: Every seed produces a different incident
+
+Failure space: 4 services x 3 failure types x 2 severities = 24 distinct failure configurations, each with continuous parameter variation from the RNG.
+
 ## Action Space
 
 9 typed action types via `PipelineAction`:
@@ -122,8 +137,9 @@ Model: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Router
 | judgment_call | Hard | 0.184 | 0.935 | +0.751 |
 | cascading_failure | Med-Hard | 0.280 | 0.883 | +0.603 |
 | capacity_crisis | Med-Hard | 0.250 | 0.634 | +0.384 |
+| random_incident | Variable | 0.350 | 0.982 | +0.632 |
 
-LLM baselines from initial inference run. Optimal scores from scripted expert trajectories. The large gap between LLM baseline and optimal demonstrates significant room for RL training improvement — the environment produces meaningful reward signal across the full skill spectrum.
+LLM baselines from initial inference run. Optimal scores from scripted expert trajectories. The large gap between LLM baseline and optimal demonstrates significant room for RL training improvement — the environment produces meaningful reward signal across the full skill spectrum. The `random_incident` task generates unique scenarios from each seed, enabling curriculum learning.
 
 ## Example Episode Trajectory
 
@@ -140,6 +156,7 @@ Step 5: approve("All services healthy")  → reward +0.03  (episode complete)
 
 ## Environment Features
 
+- 6 tasks (5 hand-crafted + 1 procedurally generated) for curriculum learning
 - 5 microservices with realistic dependency graph
 - Stochastic simulation with seeded RNG for full reproducibility
 - Realistic production logs (Java/Node stack traces, timestamps, red herrings)

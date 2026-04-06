@@ -957,12 +957,213 @@ class CapacityCrisisScenario(Scenario):
         return False
 
 
+class RandomIncidentScenario(Scenario):
+    """Task 6: Procedurally generated incident — infinite variation for curriculum learning."""
+
+    def __init__(self):
+        super().__init__(
+            task_name="random_incident",
+            task_description="",
+            goal="",
+            max_steps=15,
+        )
+        self._failing_service = None
+        self._failure_type = None
+
+    def setup(self, engine):
+        from server.pipeline_engine import ServiceState
+
+        rng = engine._rng
+
+        failing_candidates = ["api-gateway", "cache-service", "auth-service", "web-frontend"]
+        failing_service = rng.choice(failing_candidates)
+        failure_types = ["config_error", "degraded_performance", "capacity_limit"]
+        failure_type = rng.choice(failure_types)
+        severity = rng.choice(["moderate", "severe"])
+
+        # All 5 services start healthy
+        engine.services["database-primary"] = ServiceState(
+            name="database-primary", version="v5.2.0",
+            health=ServiceHealth.HEALTHY,
+            config={"max_connections": "50", "replication_lag_ms": "0",
+                    "shared_buffers": "4GB", "wal_level": "replica"},
+            dependencies=[], latency_ms=25.0, error_rate=0.5, cpu=40.0, memory=60.0,
+        )
+        engine.services["database-primary"].prod_deployed = True
+        engine.services["database-primary"].logs = [
+            "2026-04-01T14:00:00.001Z INFO  [database-primary] PostgreSQL 15.4 running. Pool: 15/50.",
+        ]
+
+        engine.services["auth-service"] = ServiceState(
+            name="auth-service", version="v3.1.0",
+            health=ServiceHealth.HEALTHY,
+            config={"token_ttl_seconds": "3600", "jwt_algorithm": "RS256",
+                    "rate_limit_per_minute": "1000", "cert_expiry": "2026-12-01"},
+            dependencies=["database-primary"], latency_ms=15.0, error_rate=0.2,
+            cpu=30.0, memory=40.0,
+        )
+        engine.services["auth-service"].prod_deployed = True
+        engine.services["auth-service"].logs = [
+            "2026-04-01T14:00:00.501Z INFO  [auth-service] OAuth2 provider running. RS256. TTL: 3600s.",
+        ]
+
+        engine.services["api-gateway"] = ServiceState(
+            name="api-gateway", version="v2.3.1",
+            health=ServiceHealth.HEALTHY,
+            config={"database.pool_size": "20", "cache.ttl": "300", "log.level": "info"},
+            dependencies=["database-primary", "auth-service"], latency_ms=45.0,
+            error_rate=0.1, cpu=35.0, memory=50.0,
+        )
+        engine.services["api-gateway"].prod_deployed = True
+        engine.services["api-gateway"].logs = [
+            "2026-04-01T14:00:01.001Z INFO  [api-gateway] Request router started. Upstreams: 5 services.",
+        ]
+
+        engine.services["cache-service"] = ServiceState(
+            name="cache-service", version="v1.2.0",
+            health=ServiceHealth.HEALTHY,
+            config={"redis.host": "redis-prod.internal:6379",
+                    "redis.max_connections": "50", "redis.timeout": "5000"},
+            dependencies=["database-primary"], latency_ms=10.0, error_rate=0.0,
+            cpu=15.0, memory=30.0,
+        )
+        engine.services["cache-service"].prod_deployed = True
+        engine.services["cache-service"].logs = [
+            "2026-04-01T14:00:00.201Z INFO  [cache-service] Redis connected. Pool: 10/50.",
+        ]
+
+        engine.services["web-frontend"] = ServiceState(
+            name="web-frontend", version="v1.9.0",
+            health=ServiceHealth.HEALTHY,
+            config={"api.endpoint": "https://api.internal:8080",
+                    "cdn.enabled": "true", "log.level": "info"},
+            dependencies=["api-gateway", "auth-service"], latency_ms=30.0,
+            error_rate=0.05, cpu=28.0, memory=35.0,
+        )
+        engine.services["web-frontend"].prod_deployed = True
+        engine.services["web-frontend"].logs = [
+            "2026-04-01T14:00:02.001Z INFO  [web-frontend] App started. CDN: enabled.",
+        ]
+
+        # Apply the random failure
+        svc = engine.services[failing_service]
+
+        config_errors = {
+            "cache-service": ("redis.host", "redis-staging.internal:6379",
+                              "Config mismatch: redis.host points to staging (redis-staging.internal:6379)"),
+            "api-gateway": ("cache.ttl", "0",
+                            "cache.ttl=0 disables caching — all requests hit database directly"),
+            "auth-service": ("token_ttl_seconds", "5",
+                             "token_ttl=5s causes constant re-authentication, elevated errors everywhere"),
+            "web-frontend": ("api.endpoint", "https://api-staging.internal:8080",
+                             "api.endpoint points to staging environment, not production"),
+        }
+
+        if failure_type == "config_error":
+            key, bad_val, hint = config_errors[failing_service]
+            svc.config[key] = bad_val
+            if severity == "severe":
+                svc.health = ServiceHealth.DEGRADED
+                svc.error_rate = round(15.0 + rng.uniform(0, 10), 2)
+                svc.latency_ms = round(800.0 + rng.uniform(0, 500), 1)
+            else:
+                svc.error_rate = round(5.0 + rng.uniform(0, 5), 2)
+                svc.latency_ms = round(300.0 + rng.uniform(0, 200), 1)
+            svc.logs.append(
+                f"2026-04-01T14:05:00.001Z ERROR [{failing_service}] {hint}"
+            )
+
+        elif failure_type == "degraded_performance":
+            svc.health = ServiceHealth.DEGRADED
+            svc.cpu_percent = round(75.0 + rng.uniform(0, 15), 1)
+            svc.error_rate = round(8.0 + rng.uniform(0, 10), 2)
+            svc.latency_ms = round(500.0 + rng.uniform(0, 1000), 1)
+            svc.logs.append(
+                f"2026-04-01T14:05:00.001Z WARN  [{failing_service}] "
+                f"Performance degraded. CPU: {svc.cpu_percent:.0f}%, "
+                f"latency: {svc.latency_ms:.0f}ms"
+            )
+
+        elif failure_type == "capacity_limit":
+            capacity_configs = {
+                "cache-service": ("redis.max_connections", "5",
+                                  "Redis connection pool exhausted (5/5). Increase redis.max_connections."),
+                "auth-service": ("rate_limit_per_minute", "50",
+                                 "Rate limiter triggered at 50/min. Increase rate_limit_per_minute."),
+                "api-gateway": ("database.pool_size", "2",
+                                "Connection pool exhausted (2/2). Increase database.pool_size."),
+                "web-frontend": ("cdn.enabled", "false",
+                                 "CDN disabled. All requests hitting origin. Enable cdn.enabled."),
+            }
+            key, bad_val, hint = capacity_configs[failing_service]
+            svc.config[key] = bad_val
+            svc.health = ServiceHealth.DEGRADED
+            svc.error_rate = round(10.0 + rng.uniform(0, 8), 2)
+            svc.latency_ms = round(400.0 + rng.uniform(0, 600), 1)
+            svc.logs.append(
+                f"2026-04-01T14:05:00.001Z ERROR [{failing_service}] {hint}"
+            )
+
+        self.task_description = (
+            f"INCIDENT: {failing_service} is experiencing issues "
+            f"({failure_type.replace('_', ' ')}). Severity: {severity}. "
+            f"Investigate logs and config to diagnose the root cause, "
+            f"then fix the issue and stabilize the system."
+        )
+        self.goal = (
+            f"Restore {failing_service} to healthy state. "
+            f"Keep all other services healthy. Minimize downtime."
+        )
+        self._failing_service = failing_service
+        self._failure_type = failure_type
+
+        engine.commit_sha = "r4nd0m"
+        engine.triggered_by = "monitoring-alert"
+        engine.test_pass = 145
+        engine.test_fail = 0
+        engine.build_logs = "Build succeeded."
+        engine.alerts = [
+            AlertInfo(
+                severity="warning",
+                message=f"{failing_service} {failure_type.replace('_', ' ')} detected",
+                service_name=failing_service,
+                timestamp="2026-04-01T14:05:00Z",
+            ),
+        ]
+        engine._time_pressure = severity == "severe"
+
+    def check_config_error(self, service_name, config):
+        """Check if config has an error based on the generated scenario."""
+        config_errors = {
+            "cache-service": ("redis.host", "redis-staging.internal:6379"),
+            "api-gateway": ("cache.ttl", "0"),
+            "auth-service": ("token_ttl_seconds", "5"),
+            "web-frontend": ("api.endpoint", "https://api-staging.internal:8080"),
+        }
+        capacity_errors = {
+            "cache-service": ("redis.max_connections", "5"),
+            "auth-service": ("rate_limit_per_minute", "50"),
+            "api-gateway": ("database.pool_size", "2"),
+            "web-frontend": ("cdn.enabled", "false"),
+        }
+        if service_name in config_errors:
+            key, bad_val = config_errors[service_name]
+            if config.get(key) == bad_val:
+                return True
+        if service_name in capacity_errors:
+            key, bad_val = capacity_errors[service_name]
+            if config.get(key) == bad_val:
+                return True
+        return False
+
+
 SCENARIOS = {
     "clean_deploy": CleanDeployScenario,
     "broken_pipeline": BrokenPipelineScenario,
     "judgment_call": JudgmentCallScenario,
     "cascading_failure": CascadingFailureScenario,
     "capacity_crisis": CapacityCrisisScenario,
+    "random_incident": RandomIncidentScenario,
 }
 
 

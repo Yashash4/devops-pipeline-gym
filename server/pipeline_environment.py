@@ -31,6 +31,7 @@ TASK_SEEDS = {
     "judgment_call": 3003,
     "cascading_failure": 4004,
     "capacity_crisis": 5005,
+    "random_incident": 6006,
 }
 
 TASK_MAX_STEPS = {
@@ -39,6 +40,7 @@ TASK_MAX_STEPS = {
     "judgment_call": 12,
     "cascading_failure": 15,
     "capacity_crisis": 15,
+    "random_incident": 15,
 }
 
 # Goal suffixes that hint at investigation without giving away answers
@@ -47,6 +49,7 @@ _INVESTIGATION_HINTS = {
     "broken_pipeline": " Investigate service logs and configs to diagnose issues before acting.",
     "judgment_call": " Check service logs and configs to understand the incident before deciding.",
     "capacity_crisis": " Inspect database-primary logs and config to find the bottleneck.",
+    "random_incident": " Investigate service logs and config to find the root cause.",
 }
 
 

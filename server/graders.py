@@ -291,12 +291,61 @@ def grade_capacity_crisis(episode_history, engine):
     return min(max(score, 0.0), 1.0)
 
 
+def grade_random_incident(episode_history, engine):
+    """
+    Task 6 grader — procedurally generated incident (all outcome-based):
+    - 0.35 — failing service restored to healthy
+    - 0.25 — system health maintained
+    - 0.20 — config error fixed (if applicable)
+    - 0.10 — investigation performed (viewed logs/config of failing service)
+    - 0.10 — step efficiency
+    """
+    score = 0.0
+    scenario = engine.scenario
+    failing_name = getattr(scenario, '_failing_service', None)
+    failing_svc = engine.services.get(failing_name) if failing_name else None
+
+    # Failing service restored (0.35)
+    if failing_svc and failing_svc.health.value == "healthy":
+        score += 0.35
+    elif failing_svc and failing_svc.health.value == "degraded" and failing_svc.error_rate < 5.0:
+        score += 0.15
+
+    # System health (0.25)
+    system_health = engine.get_system_health()
+    score += (system_health / 100.0) * 0.25
+
+    # Config fixed (0.20)
+    if failing_svc:
+        if not scenario.check_config_error(failing_name, failing_svc.config):
+            score += 0.20
+        elif getattr(scenario, '_failure_type', '') == 'degraded_performance':
+            score += 0.20  # No config error to fix for degraded_performance
+
+    # Investigation (0.10)
+    investigated = False
+    for entry in episode_history:
+        action = entry.get("action", {})
+        if action.get("action_type") in ("view_logs", "view_config") and action.get("service_name") == failing_name:
+            investigated = True
+            break
+    if investigated:
+        score += 0.10
+
+    # Efficiency (0.10)
+    steps = len(episode_history)
+    score += max(0.0, 1.0 - steps / 30.0) * 0.10
+
+    return min(max(score, 0.0), 1.0)
+
+
 GRADERS = {
     "clean_deploy": grade_clean_deploy,
     "broken_pipeline": grade_broken_pipeline,
     "judgment_call": grade_judgment_call,
     "cascading_failure": grade_cascading_failure,
     "capacity_crisis": grade_capacity_crisis,
+    "random_incident": grade_random_incident,
 }
 
 

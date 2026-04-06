@@ -62,6 +62,12 @@ def get_tasks():
                 "description": "Peak traffic 4x normal. database-primary connection pool nearly full. Stabilize before tipping points trigger cascading collapse.",
                 "max_steps": 15,
             },
+            {
+                "name": "random_incident",
+                "difficulty": "variable",
+                "description": "Procedurally generated incident. Service, failure type, and severity are randomized from seed. Infinite variation for curriculum learning.",
+                "max_steps": 15,
+            },
         ],
         "action_schema": PipelineAction.model_json_schema(),
     }
@@ -83,6 +89,7 @@ async def run_baseline():
             "judgment_call": 0.184,
             "cascading_failure": 0.280,
             "capacity_crisis": 0.250,
+            "random_incident": 0.350,
         },
         "model": "Qwen/Qwen2.5-72B-Instruct",
         "note": "Recorded from inference.py run on 2026-04-04.",

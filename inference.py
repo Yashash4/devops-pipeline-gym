@@ -20,9 +20,9 @@ MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
 IMAGE_NAME = os.getenv("IMAGE_NAME")
 
 BENCHMARK = "devops_pipeline"
-TASKS = ["clean_deploy", "broken_pipeline", "judgment_call", "cascading_failure", "capacity_crisis"]
-MAX_STEPS_PER_TASK = {"clean_deploy": 15, "broken_pipeline": 20, "judgment_call": 12, "cascading_failure": 15, "capacity_crisis": 15}
-MAX_TOTAL_REWARD = {"clean_deploy": 0.70, "broken_pipeline": 0.85, "judgment_call": 0.65, "cascading_failure": 0.80, "capacity_crisis": 0.75}
+TASKS = ["clean_deploy", "broken_pipeline", "judgment_call", "cascading_failure", "capacity_crisis", "random_incident"]
+MAX_STEPS_PER_TASK = {"clean_deploy": 15, "broken_pipeline": 20, "judgment_call": 12, "cascading_failure": 15, "capacity_crisis": 15, "random_incident": 15}
+MAX_TOTAL_REWARD = {"clean_deploy": 0.70, "broken_pipeline": 0.85, "judgment_call": 0.65, "cascading_failure": 0.80, "capacity_crisis": 0.75, "random_incident": 0.70}
 TEMPERATURE = 0.7
 MAX_TOKENS = 300
 SUCCESS_SCORE_THRESHOLD = 0.1
@@ -78,6 +78,7 @@ TASK-SPECIFIC GUIDANCE:
 - judgment_call: INCIDENT — check api-gateway logs first. Three options: (1) BEST: deploy hotfix v2.3.2 to api-gateway THEN edit web-frontend config api.auth_version to "v2", (2) SAFE: rollback api-gateway, (3) RISKY: deploy hotfix without fixing auth. Option 1 scores highest.
 - cascading_failure: Find ROOT CAUSE — check cache-service first, it's usually the source. Fix its config (max_connections too low), deploy it, then recover downstream services.
 - capacity_crisis: Check database-primary IMMEDIATELY — connection pool nearly full. Increase max_connections to 100+. Act FAST before tipping points cascade.
+- random_incident: Procedurally generated. Read the task description carefully — it tells you which service is failing and what type of failure. Investigate that service first.
 
 You must respond with a SINGLE valid JSON object matching the PipelineAction schema.
 
