@@ -197,7 +197,7 @@ async def run_task(client, env, task_name):
 
     try:
         os.environ["DEVOPS_TASK"] = task_name
-        result = await env.reset()
+        result = await env.reset(task=task_name)
         obs = result.observation
 
         for step in range(1, max_steps + 1):

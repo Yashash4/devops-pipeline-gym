@@ -66,9 +66,13 @@ class PipelineEnvironment(Environment):
         self._viewed_actions = set()
         self._investigated_services = set()  # e.g. "logs:api-gateway", "config:cache-service"
 
-    def reset(self) -> PipelineObservation:
-        """Initialize a new episode. Task selected via DEVOPS_TASK env var."""
-        self._task_name = os.environ.get("DEVOPS_TASK", "clean_deploy")
+    def reset(self, seed=None, episode_id=None, **kwargs) -> PipelineObservation:
+        """Initialize a new episode. Task from reset body, env var, or default."""
+        self._task_name = (
+            kwargs.get("task")
+            or os.environ.get("DEVOPS_TASK")
+            or "clean_deploy"
+        )
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._episode_history = []
         self._viewed_actions = set()
