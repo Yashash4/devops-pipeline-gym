@@ -17,7 +17,7 @@ def grade_clean_deploy(episode_history, engine):
     Task 1 grader:
     - 0.50 * (services at target version in prod / services with targets)
     - 0.30 * (final system_health / 100)
-    - 0.20 * max(0, 1 - steps_used / (max_steps * 2))
+    - 0.20 * max(0, 1 - steps_used / max_steps)
     """
     target_services = [s for s in engine.services.values() if s.target_version]
     deployed_count = sum(
@@ -30,7 +30,7 @@ def grade_clean_deploy(episode_history, engine):
 
     steps_used = len(episode_history)
     max_steps = 15
-    efficiency = max(0.0, 1.0 - steps_used / (max_steps * 2))
+    efficiency = max(0.0, 1.0 - steps_used / max_steps)
 
     score = 0.50 * deploy_ratio + 0.30 * (system_health / 100.0) + 0.20 * efficiency
     return min(max(score, 0.0), 1.0)
@@ -43,7 +43,7 @@ def grade_broken_pipeline(episode_history, engine):
     - 0.15 — migration applied (add_index_users_email in applied list)
     - 0.30 — (services at target in prod / 3)
     - 0.15 — (final system_health / 100)
-    - 0.10 — step efficiency: max(0, 1 - steps_used / (max_steps * 2))
+    - 0.10 — step efficiency: max(0, 1 - steps_used / max_steps)
     """
     score = 0.0
 
@@ -72,7 +72,7 @@ def grade_broken_pipeline(episode_history, engine):
     # Step efficiency
     steps_used = len(episode_history)
     max_steps = 20
-    efficiency = max(0.0, 1.0 - steps_used / (max_steps * 2))
+    efficiency = max(0.0, 1.0 - steps_used / max_steps)
     score += 0.10 * efficiency
 
     return min(max(score, 0.0), 1.0)
@@ -140,12 +140,12 @@ def grade_judgment_call(episode_history, engine):
         elif web_fe.error_rate < 10.0:
             score += 0.10
 
-    # Time to resolution
+    # Time to resolution — when api-gateway actually became healthy (outcome-based)
     resolution_step = len(episode_history)
     if resolved:
         for entry in episode_history:
-            action = entry.get("action", {})
-            if action.get("action_type") in ("deploy", "rollback"):
+            sh = entry.get("system_health", 0)
+            if sh >= 80:
                 resolution_step = entry.get("step", len(episode_history))
                 break
     score += max(0.0, 1.0 - resolution_step / 10.0) * 0.15
@@ -181,7 +181,7 @@ def grade_cascading_failure(episode_history, engine):
     - 0.25 — all services deployed to prod at target version
     - 0.20 — final system_health / 100 (only full marks if > 90%)
     - 0.15 — dependency health (cache-service healthy when api-gateway deployed)
-    - 0.10 — step efficiency: max(0, 1 - steps_used / (max_steps * 2))
+    - 0.10 — step efficiency: max(0, 1 - steps_used / max_steps)
     """
     score = 0.0
 
@@ -229,7 +229,7 @@ def grade_cascading_failure(episode_history, engine):
     # Step efficiency
     steps_used = len(episode_history)
     max_steps = 15
-    efficiency = max(0.0, 1.0 - steps_used / (max_steps * 2))
+    efficiency = max(0.0, 1.0 - steps_used / max_steps)
     score += 0.10 * efficiency
 
     return min(max(score, 0.0), 1.0)
@@ -242,7 +242,7 @@ def grade_capacity_crisis(episode_history, engine):
     - 0.30 — root cause: database-primary protected (CPU<85, config fixed)
     - 0.20 — critical services maintained (api-gateway not DOWN, low errors)
     - 0.10 — proactive response: no service went DOWN during episode
-    - 0.10 — step efficiency: max(0, 1 - steps_used / (max_steps * 2))
+    - 0.10 — step efficiency: max(0, 1 - steps_used / max_steps)
     """
     score = 0.0
     db = engine.services.get("database-primary")
@@ -285,7 +285,7 @@ def grade_capacity_crisis(episode_history, engine):
     # Step efficiency (0.10)
     steps_used = len(episode_history)
     max_steps = 15
-    efficiency = max(0.0, 1.0 - steps_used / (max_steps * 2))
+    efficiency = max(0.0, 1.0 - steps_used / max_steps)
     score += 0.10 * efficiency
 
     return min(max(score, 0.0), 1.0)
@@ -297,7 +297,7 @@ def grade_random_incident(episode_history, engine):
     - 0.35 — failing service restored to healthy
     - 0.25 — system health maintained
     - 0.20 — config error fixed (if applicable)
-    - 0.10 — investigation performed (viewed logs/config of failing service)
+    - 0.10 — no collateral damage (no healthy services broken)
     - 0.10 — step efficiency
     """
     score = 0.0
@@ -322,19 +322,17 @@ def grade_random_incident(episode_history, engine):
         elif getattr(scenario, '_failure_type', '') == 'degraded_performance':
             score += 0.20  # No config error to fix for degraded_performance
 
-    # Investigation (0.10)
-    investigated = False
-    for entry in episode_history:
-        action = entry.get("action", {})
-        if action.get("action_type") in ("view_logs", "view_config") and action.get("service_name") == failing_name:
-            investigated = True
-            break
-    if investigated:
+    # No collateral damage (0.10) — outcome-based, not procedure-based
+    any_broke = any(entry.get("broke_healthy", False) for entry in episode_history)
+    if not any_broke:
         score += 0.10
+    elif system_health > 60:
+        score += 0.05
 
     # Efficiency (0.10)
     steps = len(episode_history)
-    score += max(0.0, 1.0 - steps / 30.0) * 0.10
+    max_steps = 15
+    score += max(0.0, 1.0 - steps / max_steps) * 0.10
 
     return min(max(score, 0.0), 1.0)
 

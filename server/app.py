@@ -104,6 +104,8 @@ async def run_grader(task_name: str = "clean_deploy"):
     env = getattr(app.state, "active_env", None)
     if env is None or env.get_engine() is None:
         return {"task": task_name, "score": 0.0, "error": "No active session. Call /reset first."}
+    if not env.get_episode_history():
+        return {"task": env.get_task_name(), "score": 0.0, "error": "No steps taken. Call /step first."}
     score = _grade_task(
         env.get_task_name(),
         env.get_episode_history(),

@@ -287,17 +287,11 @@ class PipelineEngine:
 
     def execute(self, action):
         """Execute an action. Returns human-readable result string."""
-        # Tick health recovery for all services
+        # 1. Tick health recovery for all services (heal from previous deploys)
         for svc in self.services.values():
             svc.tick_recovery()
 
-        # Time pressure: degrade api-gateway health each step
-        if self._time_pressure:
-            self._apply_time_pressure()
-
-        # Cascading failures: unhealthy services degrade their dependents
-        self._tick_cascading_effects()
-
+        # 2. Execute the agent's action FIRST
         if action.action_type == ActionType.VIEW_PIPELINE:
             result = self._view_pipeline()
         elif action.action_type == ActionType.VIEW_LOGS:
@@ -319,10 +313,11 @@ class PipelineEngine:
         else:
             result = "Unknown action."
 
-        # Cross-metric compounding: metrics affect each other
+        # 3. Environmental effects AFTER action (agent sees consequences)
+        if self._time_pressure:
+            self._apply_time_pressure()
+        self._tick_cascading_effects()
         self._tick_metric_compounding()
-
-        # Non-linear tipping points — cliff effects
         self._tick_tipping_points()
 
         return result

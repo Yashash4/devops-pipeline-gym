@@ -19,7 +19,7 @@ API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
 IMAGE_NAME = os.getenv("IMAGE_NAME")
 
-BENCHMARK = "devops_pipeline"
+BENCHMARK = "devops_pipeline_env"
 TASKS = ["clean_deploy", "broken_pipeline", "judgment_call", "cascading_failure", "capacity_crisis", "random_incident"]
 MAX_STEPS_PER_TASK = {"clean_deploy": 15, "broken_pipeline": 20, "judgment_call": 12, "cascading_failure": 15, "capacity_crisis": 15, "random_incident": 15}
 MAX_TOTAL_REWARD = {"clean_deploy": 0.70, "broken_pipeline": 0.85, "judgment_call": 0.65, "cascading_failure": 0.80, "capacity_crisis": 0.75, "random_incident": 0.70}
@@ -29,11 +29,11 @@ SUCCESS_SCORE_THRESHOLD = 0.1
 
 
 # --- Log Functions (EXACT hackathon format) -----------------------------------
-def log_start(task, env, model):
+def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def log_step(step, action, reward, done, error):
+def log_step(step: int, action: str, reward: float, done: bool, error: str | None) -> None:
     error_val = error if error else "null"
     done_val = str(done).lower()
     print(
@@ -43,7 +43,7 @@ def log_step(step, action, reward, done, error):
     )
 
 
-def log_end(success, steps, score, rewards):
+def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
         f"[END] success={str(success).lower()} steps={steps} "

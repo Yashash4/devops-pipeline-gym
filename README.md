@@ -114,17 +114,19 @@ Failure space: 4 services x 3 failure types x 2 severities = 24 distinct failure
 
 ## Reward Design
 
-Dense per-step reward that creates a learnable gradient for RL training. Investigation actions give a small positive signal (+0.02 for first-time views). Health improvements give proportional reward via system health delta (+0.005 per 1% improvement). Breaking healthy services is heavily penalized (-0.30). Repeated identical actions are penalized (-0.01 to -0.02). All grading is outcome-based — no procedure-based criteria (e.g., no bonus for "deploying to staging before production"). Rewards are bounded [-0.35, +0.20] per step to prevent training instability.
+Dense per-step reward that creates a learnable gradient for RL training. Investigation rewards are **information-gain aware** — viewing logs on a degraded service gives +0.04 (high info-gain) while a healthy service gives +0.01 (low info-gain). Health improvements give proportional reward via system health delta (+0.005 per 1% improvement). Breaking healthy services is heavily penalized (-0.30). Repeated identical actions are penalized (-0.02). All grading is outcome-based — no procedure-based criteria. Rewards are **task-adaptive** — harder tasks with time pressure get steeper gradients (1.0x–1.5x urgency scaling), creating a curriculum-aware reward landscape. Rewards are bounded [-0.35, +0.20] per step to prevent training instability.
 
 | Signal | Reward | Condition |
 |--------|--------|-----------|
 | Service deployed to production | +0.15 | Service reaches prod successfully |
 | Service verified in staging | +0.05 | Staging health check passes |
-| Investigation (first-time) | +0.02 | view_pipeline, view_logs, view_config |
+| Investigation (degraded svc) | +0.04 | First-time view on unhealthy service |
+| Investigation (healthy svc) | +0.01 | First-time view on healthy service |
+| Investigation (global) | +0.02 | First-time view_pipeline |
 | Health improvement | +0.005/1% | System health delta |
 | Broke healthy service | -0.30 | Service went from healthy to degraded/down |
 | Repeated investigation | -0.01 | Same view action on same target |
-| True no-op | -0.01 | Action produced no state change |
+| Repeated exact action | -0.02 | Same action_type + service as last step |
 
 ## Baseline Scores
 
@@ -137,7 +139,7 @@ Model: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Router
 | judgment_call | Hard | 0.184 | 0.935 | +0.751 |
 | cascading_failure | Med-Hard | 0.280 | 0.883 | +0.603 |
 | capacity_crisis | Med-Hard | 0.250 | 0.634 | +0.384 |
-| random_incident | Variable | 0.350 | 0.982 | +0.632 |
+| random_incident (seed 6006) | Variable | 0.350 | 0.982 | +0.632 |
 
 LLM baselines from initial inference run. Optimal scores from scripted expert trajectories. The large gap between LLM baseline and optimal demonstrates significant room for RL training improvement — the environment produces meaningful reward signal across the full skill spectrum. The `random_incident` task generates unique scenarios from each seed, enabling curriculum learning.
 

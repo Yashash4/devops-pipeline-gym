@@ -66,6 +66,7 @@ class PipelineEnvironment(Environment):
         self._max_steps = 15
         self._episode_history = []
         self._viewed_actions = set()
+        self._last_action_key = None
         self._investigated_services = set()  # e.g. "logs:api-gateway", "config:cache-service"
 
     def reset(self, seed=None, episode_id=None, **kwargs) -> PipelineObservation:
@@ -78,6 +79,7 @@ class PipelineEnvironment(Environment):
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._episode_history = []
         self._viewed_actions = set()
+        self._last_action_key = None
         self._investigated_services = set()
         if PipelineEnvironment._register_callback:
             PipelineEnvironment._register_callback(self)
@@ -130,7 +132,11 @@ class PipelineEnvironment(Environment):
         current_state = self._engine.snapshot()
 
         # Calculate outcome-based reward
-        reward = calculate_reward(prev_state, current_state, action, self._viewed_actions)
+        reward = calculate_reward(
+            prev_state, current_state, action, self._viewed_actions,
+            last_action_key=self._last_action_key, task_name=self._task_name,
+        )
+        self._last_action_key = f"{action.action_type.value}:{action.service_name or ''}"
 
         # Check episode termination
         done = self._check_done(action)
@@ -148,6 +154,7 @@ class PipelineEnvironment(Environment):
             "reward": reward,
             "error": None,
             "broke_healthy": broke_healthy,
+            "system_health": self._engine.get_system_health(),
         })
 
         # Include config_snapshot if viewing/editing config

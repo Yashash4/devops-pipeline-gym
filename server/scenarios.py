@@ -1134,6 +1134,10 @@ class RandomIncidentScenario(Scenario):
 
     def check_config_error(self, service_name, config):
         """Check if config has an error based on the generated scenario."""
+        if service_name != self._failing_service:
+            return False
+        if self._failure_type not in ('config_error', 'capacity_limit'):
+            return False
         config_errors = {
             "cache-service": ("redis.host", "redis-staging.internal:6379"),
             "api-gateway": ("cache.ttl", "0"),

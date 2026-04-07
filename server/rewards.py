@@ -9,11 +9,24 @@
 from devops_pipeline_env.models import ActionType
 
 
-def calculate_reward(prev_snapshot, current_snapshot, action, viewed_actions):
+# Task urgency multipliers — harder tasks get steeper reward gradients
+TASK_URGENCY = {
+    "clean_deploy": 1.0,
+    "broken_pipeline": 1.2,
+    "judgment_call": 1.5,
+    "cascading_failure": 1.3,
+    "capacity_crisis": 1.4,
+    "random_incident": 1.3,
+}
+
+
+def calculate_reward(prev_snapshot, current_snapshot, action, viewed_actions,
+                     last_action_key=None, task_name="clean_deploy"):
     """
     Outcome-based reward. No procedure bonuses.
-    viewed_actions: a set owned by the environment instance, tracking first-time views
-                    AND last action for repeat detection.
+    viewed_actions: a set tracking first-time investigation keys (e.g. "view_logs:api-gateway")
+    last_action_key: string key of previous action for repeat detection
+    task_name: current task for urgency scaling
     Returns a float bounded to [-0.35, +0.20].
     """
     reward = 0.0
@@ -36,38 +49,32 @@ def calculate_reward(prev_snapshot, current_snapshot, action, viewed_actions):
         if prev_svc.get("health") == "healthy" and curr_svc["health"] in ("degraded", "down"):
             reward -= 0.30  # Catastrophic penalty
 
-    # 4. Investigation bonus (+0.02 for first-time view_* actions)
+    # 4. Investigation bonus (info-gain aware)
     if action.action_type in (ActionType.VIEW_PIPELINE, ActionType.VIEW_LOGS, ActionType.VIEW_CONFIG):
         action_key = f"{action.action_type.value}:{action.service_name or 'global'}"
         if action_key not in viewed_actions:
             viewed_actions.add(action_key)
-            reward += 0.02
+            # Higher reward for investigating unhealthy services (more info gain)
+            if action.service_name:
+                svc_data = current_snapshot["services"].get(action.service_name, {})
+                if svc_data.get("health") in ("degraded", "down"):
+                    reward += 0.04  # High info-gain
+                else:
+                    reward += 0.01  # Low info-gain (healthy service)
+            else:
+                reward += 0.02  # view_pipeline (global)
         else:
-            # Repeated investigation of same target — mild penalty
-            reward -= 0.01
-        # Track last action, then return (no no-op penalty for investigation)
-        viewed_actions.discard("__last_action__")
-        viewed_actions.add("__last_action__")
-        viewed_actions.discard("__last_action_val__")
-        viewed_actions.add(f"__last_action_val__{action_key}")
+            reward -= 0.01  # Repeated investigation of same target
+
+        # Apply urgency scaling and bound
+        reward *= TASK_URGENCY.get(task_name, 1.0)
         return max(min(reward, 0.20), -0.35)
 
-    # 5. Repeated exact action penalty (same action_type + service + params as last step)
+    # 5. Repeated exact action penalty
     current_action_key = f"{action.action_type.value}:{action.service_name or ''}"
-    last_action_keys = [k for k in viewed_actions if k.startswith("__last_action_val__")]
-    if last_action_keys:
-        last_key = last_action_keys[0].replace("__last_action_val__", "")
-        if current_action_key == last_key:
-            reward -= 0.02  # Exact repeat penalty
-    # Update last action tracking
-    for k in list(viewed_actions):
-        if k.startswith("__last_action_val__"):
-            viewed_actions.discard(k)
-    viewed_actions.add(f"__last_action_val__{current_action_key}")
+    if last_action_key and current_action_key == last_action_key:
+        reward -= 0.02  # Exact repeat penalty
 
-    # 6. True no-op penalty (no state change and not an investigation action)
-    if prev_snapshot == current_snapshot:
-        reward -= 0.01
-
-    # 7. Bound reward to prevent extreme values
+    # 6. Apply task urgency scaling and bound
+    reward *= TASK_URGENCY.get(task_name, 1.0)
     return max(min(reward, 0.20), -0.35)

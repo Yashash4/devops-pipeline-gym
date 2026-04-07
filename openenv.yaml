@@ -4,5 +4,5 @@ type: space
 runtime: fastapi
 app: server.app:app
 port: 8000
-description: "CI/CD deployment pipeline environment where an AI agent manages deployments across 5 interdependent microservices. Agent reads logs, edits configs, runs migrations, and makes deployment decisions. Features 5 tasks (Easy to Hard): clean deploy, broken pipeline diagnosis, judgment calls under pressure, cascading failure recovery, and capacity crisis management."
+description: "CI/CD deployment pipeline environment where an AI agent manages deployments across 5 interdependent microservices. Agent reads logs, edits configs, runs migrations, and makes deployment decisions. Features 6 tasks (Easy to Hard + procedural generation): clean deploy, broken pipeline diagnosis, judgment calls under pressure, cascading failure recovery, capacity crisis management, and randomized incidents from seed."
 version: "0.1.0"
