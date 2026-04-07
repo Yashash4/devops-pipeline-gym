@@ -133,12 +133,18 @@ def grade_judgment_call(episode_history, engine):
         elif api_gw.latency_ms < 500:
             score += 0.10  # Partial improvement
 
-    # web-frontend collateral damage
+    # web-frontend collateral damage (smooth gradient)
     if web_fe:
-        if web_fe.health.value == "healthy" and web_fe.error_rate < 2.0:
+        if web_fe.health.value == "healthy" and web_fe.error_rate < 0.5:
             score += 0.25
+        elif web_fe.health.value == "healthy" and web_fe.error_rate < 2.0:
+            score += 0.20
+        elif web_fe.health.value == "healthy" and web_fe.error_rate < 5.0:
+            score += 0.15
         elif web_fe.error_rate < 10.0:
             score += 0.10
+        elif web_fe.error_rate < 20.0:
+            score += 0.05
 
     # Time to resolution — when api-gateway actually became healthy (outcome-based)
     resolution_step = len(episode_history)
@@ -255,8 +261,12 @@ def grade_capacity_crisis(episode_history, engine):
     # Root cause: database protected (0.30)
     if db:
         max_conn = int(db.config.get("max_connections", "50"))
-        if max_conn >= 100 and db.cpu_percent < 85:
-            score += 0.30
+        shared_buf = db.config.get("shared_buffers", "4GB")
+        shared_gb = int(shared_buf.replace("GB", "")) if "GB" in str(shared_buf) else 4
+        if max_conn >= 100 and db.cpu_percent < 85 and shared_gb >= 6:
+            score += 0.30  # Both configs optimized
+        elif max_conn >= 100 and db.cpu_percent < 85:
+            score += 0.25  # Connections fixed, buffers not
         elif max_conn >= 75 and db.cpu_percent < 85:
             score += 0.20
         elif max_conn >= 75:
@@ -320,7 +330,11 @@ def grade_random_incident(episode_history, engine):
         if not scenario.check_config_error(failing_name, failing_svc.config):
             score += 0.20
         elif getattr(scenario, '_failure_type', '') == 'degraded_performance':
-            score += 0.20  # No config error to fix for degraded_performance
+            # No config error — check if agent actually improved the service
+            if failing_svc.error_rate < 5.0 and failing_svc.health.value == "healthy":
+                score += 0.20  # Fully recovered
+            elif failing_svc.error_rate < 10.0:
+                score += 0.10  # Partially improved
 
     # No collateral damage (0.10) — outcome-based, not procedure-based
     any_broke = any(entry.get("broke_healthy", False) for entry in episode_history)

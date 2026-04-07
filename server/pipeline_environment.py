@@ -31,7 +31,7 @@ TASK_SEEDS = {
     "judgment_call": 3003,
     "cascading_failure": 4004,
     "capacity_crisis": 5005,
-    "random_incident": 6006,
+    "random_incident": int(os.environ.get("DEVOPS_SEED", "6006")),
 }
 
 TASK_MAX_STEPS = {
@@ -232,6 +232,19 @@ class PipelineEnvironment(Environment):
                 )
             elif svc_state.cpu_percent > 80:
                 alerts.append(f"CAUTION: {name} CPU high ({svc_state.cpu_percent:.0f}%)")
+        # Add dependency chain hints for degraded services
+        for name, svc_state in self._engine.services.items():
+            if svc_state.health in (ServiceHealth.DEGRADED, ServiceHealth.DOWN):
+                upstream_issues = [
+                    d for d in svc_state.dependencies
+                    if d in self._engine.services
+                    and self._engine.services[d].health in (ServiceHealth.DEGRADED, ServiceHealth.DOWN)
+                ]
+                if upstream_issues:
+                    alerts.append(
+                        f"HINT: {name} depends on {', '.join(upstream_issues)} "
+                        f"(also unhealthy — root cause likely upstream)"
+                    )
         summary = "; ".join(alerts) if alerts else "All services nominal."
 
         return PipelineObservation(

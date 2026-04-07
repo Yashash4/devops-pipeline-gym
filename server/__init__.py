@@ -5,7 +5,3 @@
 # LICENSE file in the root directory of this source tree.
 
 """DevOps Pipeline environment server components."""
-
-from server.pipeline_environment import PipelineEnvironment
-
-__all__ = ["PipelineEnvironment"]

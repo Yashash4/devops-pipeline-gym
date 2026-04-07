@@ -106,6 +106,9 @@ async def run_grader(task_name: str = "clean_deploy"):
         return {"task": task_name, "score": 0.0, "error": "No active session. Call /reset first."}
     if not env.get_episode_history():
         return {"task": env.get_task_name(), "score": 0.0, "error": "No steps taken. Call /step first."}
+    active_task = env.get_task_name()
+    if task_name and task_name != "clean_deploy" and task_name != active_task:
+        return {"task": task_name, "score": 0.0, "error": f"Task mismatch: active session is '{active_task}', not '{task_name}'."}
     score = _grade_task(
         env.get_task_name(),
         env.get_episode_history(),

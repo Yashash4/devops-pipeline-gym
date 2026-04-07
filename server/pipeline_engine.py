@@ -620,11 +620,14 @@ class PipelineEngine:
                     "latency_ms": s.latency_ms,
                     "prod_deployed": s.prod_deployed,
                     "staging_verified": s.staging_verified,
+                    "config": dict(s.config),
                 }
                 for name, s in self.services.items()
             },
             "system_health": self.get_system_health(),
             "pipeline_stage": self.pipeline_stage.value,
+            "migrations_pending": list(self.migrations_pending),
+            "alerts": list(self.alerts),
         }
 
     def get_system_health(self):

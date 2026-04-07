@@ -114,15 +114,17 @@ Failure space: 4 services x 3 failure types x 2 severities = 24 distinct failure
 
 ## Reward Design
 
-Dense per-step reward that creates a learnable gradient for RL training. Investigation rewards are **information-gain aware** — viewing logs on a degraded service gives +0.04 (high info-gain) while a healthy service gives +0.01 (low info-gain). Health improvements give proportional reward via system health delta (+0.005 per 1% improvement). Breaking healthy services is heavily penalized (-0.30). Repeated identical actions are penalized (-0.02). All grading is outcome-based — no procedure-based criteria. Rewards are **task-adaptive** — harder tasks with time pressure get steeper gradients (1.0x–1.5x urgency scaling), creating a curriculum-aware reward landscape. Rewards are bounded [-0.35, +0.20] per step to prevent training instability.
+Dense per-step reward that creates a learnable gradient for RL training. Investigation rewards use **diminishing-returns exploration** — first investigation of an unhealthy service gives +0.04, with decay as more services are investigated. Health improvements give proportional reward via system health delta (+0.005 per 1% improvement). **Sub-goal milestones** reward intermediate progress: config fixes (+0.08), migrations (+0.06), and alert resolution (+0.03). Breaking healthy services is heavily penalized (-0.30). All grading is outcome-based — no procedure-based criteria. Rewards are **task-adaptive** — harder tasks with time pressure get steeper gradients (1.0x–1.5x urgency scaling), creating a curriculum-aware reward landscape. Rewards are bounded [-0.35, +0.20] per step to prevent training instability.
 
 | Signal | Reward | Condition |
 |--------|--------|-----------|
 | Service deployed to production | +0.15 | Service reaches prod successfully |
 | Service verified in staging | +0.05 | Staging health check passes |
-| Investigation (degraded svc) | +0.04 | First-time view on unhealthy service |
-| Investigation (healthy svc) | +0.01 | First-time view on healthy service |
-| Investigation (global) | +0.02 | First-time view_pipeline |
+| Config error fixed | +0.08 | Service health improved after config change |
+| Migration completed | +0.06 | Pending migration count decreased |
+| Alert resolved | +0.03 | Alert count decreased |
+| Investigation (degraded svc) | +0.04× | First-time view on unhealthy service (with decay) |
+| Investigation (healthy svc) | +0.01× | First-time view on healthy service (with decay) |
 | Health improvement | +0.005/1% | System health delta |
 | Broke healthy service | -0.30 | Service went from healthy to degraded/down |
 | Repeated investigation | -0.01 | Same view action on same target |
