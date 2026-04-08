@@ -4,7 +4,7 @@ emoji: 🚀
 colorFrom: blue
 colorTo: green
 sdk: docker
-pinned: false
+pinned: true
 app_port: 8000
 base_path: /web
 tags:
