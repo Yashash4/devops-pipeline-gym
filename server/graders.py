@@ -33,7 +33,7 @@ def grade_clean_deploy(episode_history, engine):
     efficiency = max(0.0, 1.0 - steps_used / max_steps)
 
     score = 0.50 * deploy_ratio + 0.30 * (system_health / 100.0) + 0.20 * efficiency
-    return min(max(score, 0.0), 1.0)
+    return min(max(score, 0.001), 0.999)
 
 
 def grade_broken_pipeline(episode_history, engine):
@@ -75,7 +75,7 @@ def grade_broken_pipeline(episode_history, engine):
     efficiency = max(0.0, 1.0 - steps_used / max_steps)
     score += 0.10 * efficiency
 
-    return min(max(score, 0.0), 1.0)
+    return min(max(score, 0.001), 0.999)
 
 
 def grade_judgment_call(episode_history, engine):
@@ -177,7 +177,7 @@ def grade_judgment_call(episode_history, engine):
     system_health = engine.get_system_health()
     score += 0.15 * (system_health / 100.0)
 
-    return min(max(score, 0.0), 1.0)
+    return min(max(score, 0.001), 0.999)
 
 
 def grade_cascading_failure(episode_history, engine):
@@ -236,7 +236,7 @@ def grade_cascading_failure(episode_history, engine):
     efficiency = max(0.0, 1.0 - steps_used / max_steps)
     score += 0.10 * efficiency
 
-    return min(max(score, 0.0), 1.0)
+    return min(max(score, 0.001), 0.999)
 
 
 def grade_capacity_crisis(episode_history, engine):
@@ -302,7 +302,7 @@ def grade_capacity_crisis(episode_history, engine):
     efficiency = max(0.0, 1.0 - steps_used / max_steps)
     score += 0.10 * efficiency
 
-    return min(max(score, 0.0), 1.0)
+    return min(max(score, 0.001), 0.999)
 
 
 def grade_random_incident(episode_history, engine):
@@ -368,7 +368,7 @@ def grade_random_incident(episode_history, engine):
         if secondary_svc and secondary_svc.health.value == "healthy":
             score += 0.10
 
-    return min(max(score, 0.0), 1.0)
+    return min(max(score, 0.001), 0.999)
 
 
 GRADERS = {
