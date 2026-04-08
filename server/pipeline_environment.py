@@ -230,17 +230,27 @@ class PipelineEnvironment(Environment):
         if hint and not self._investigated_services:
             goal = goal + hint
 
-        # Build summary from raw engine state (not filtered)
+        # Build summary — only reveal details for investigated services
         alerts = []
         for name, svc_state in self._engine.services.items():
+            investigated = (
+                f"logs:{name}" in self._investigated_services
+                or f"config:{name}" in self._investigated_services
+            )
             if svc_state.health == ServiceHealth.DOWN:
-                alerts.append(f"CRITICAL: {name} is DOWN")
+                if investigated:
+                    alerts.append(f"CRITICAL: {name} is DOWN")
+                else:
+                    alerts.append(f"CRITICAL: {name} is DOWN — investigate with view_logs to see details")
             elif svc_state.health == ServiceHealth.DEGRADED:
-                alerts.append(
-                    f"WARNING: {name} degraded "
-                    f"(lat={svc_state.latency_ms:.0f}ms, err={svc_state.error_rate:.1f}/s)"
-                )
-            elif svc_state.cpu_percent > 80:
+                if investigated:
+                    alerts.append(
+                        f"WARNING: {name} degraded "
+                        f"(lat={svc_state.latency_ms:.0f}ms, err={svc_state.error_rate:.1f}/s)"
+                    )
+                else:
+                    alerts.append(f"WARNING: {name} degraded — investigate with view_logs to see details")
+            elif investigated and svc_state.cpu_percent > 80:
                 alerts.append(f"CAUTION: {name} CPU high ({svc_state.cpu_percent:.0f}%)")
         # Add dependency chain hints for degraded services
         for name, svc_state in self._engine.services.items():

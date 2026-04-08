@@ -174,6 +174,15 @@ Step 5: approve("All services healthy")  → reward +0.03  (episode complete)
 - Dense per-step reward with anti-reward-hacking safeguards (bounded, no procedure bonuses)
 - Observation summary field for quick triage
 
+## Formal MDP Description
+
+- **State space S**: 5 services × (health ∈ {healthy, degraded, down}, cpu ∈ [0,100], memory ∈ [0,100], error_rate ∈ [0,50], latency ∈ [0,5000], config: Dict[str,str]) + pipeline status + migration status + alert list. Partially observable — CPU/memory hidden until investigated.
+- **Action space A**: 9 discrete action types with parameterized service targets. |A| ≈ 9 × 5 services = 45 effective actions.
+- **Transition T(s'|s,a)**: Deterministic core with stochastic elements (8% transient staging failure, 25% rollback regression, deploy quality variance). Seeded RNG ensures reproducibility.
+- **Reward R(s,a,s')**: Dense, bounded [-0.35, +0.20] per step. Potential-based health delta + milestone rewards + exploration bonuses with diminishing returns. Task-adaptive urgency scaling (1.0×–1.5×).
+- **Episode length**: 12–20 steps depending on task. Terminates on approve/abort/max_steps/catastrophic failure (health < 20%).
+- **Discount factor recommendation**: γ = 0.99 (short episodes, dense rewards).
+
 ## Setup
 
 ```bash

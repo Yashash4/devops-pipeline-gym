@@ -831,6 +831,7 @@ class CapacityCrisisScenario(Scenario):
             "2026-04-01T16:30:01.001Z WARN  [database-primary] Connection pool utilization: 94% (47/50 active). Queue depth: 23 pending requests.",
             "2026-04-01T16:30:02.112Z WARN  [database-primary] Slow query detected: SELECT * FROM orders WHERE user_id IN (SELECT...) -- 1.2s execution time. Sequential scan on orders table (2.4M rows).",
             "2026-04-01T16:30:03.334Z INFO  [database-primary] Autovacuum running on users table. Last vacuum: 6 hours ago.",
+            "2026-04-01T16:30:04.001Z WARN  [database-primary] shared_buffers=4GB may be insufficient for current connection count. Consider increasing to 8GB.",
         ]
 
         engine.services["auth-service"] = ServiceState(

@@ -728,7 +728,7 @@ class PipelineEngine:
                 api_gw.error_rate = round(min(api_gw.error_rate + 0.5, 50.0), 2)
 
         elif task == "random_incident":
-            failing = getattr(self.scenario, '_failing_service', None)
+            failing = getattr(self.scenario, 'failing_service', None)
             if failing:
                 svc = self.services.get(failing)
                 if svc and svc.health == ServiceHealth.DEGRADED:
