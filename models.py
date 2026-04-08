@@ -75,6 +75,7 @@ class ServiceStatus(BaseModel):
     request_latency_ms: float = Field(description="p95 latency in milliseconds")
     active_connections: int
     last_deploy_timestamp: str = Field(description="ISO 8601 timestamp")
+    recovery_status: str = Field(default="stable", description="Recovery state: 'stable' or 'stabilizing (N steps remaining)'")
 
 
 class PipelineStatus(BaseModel):

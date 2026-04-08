@@ -217,6 +217,20 @@ Step 5: approve("All services healthy")  → reward +0.03  (episode complete)
 | **Episode length** | 12–20 steps depending on task. Terminates on approve/abort/max_steps/catastrophic failure (health < 20%). |
 | **Discount factor** | Recommended γ = 0.99 (short episodes, dense rewards). |
 
+### Stochastic Elements (All Seeded)
+
+All randomness uses `random.Random(seed)` — same seed + same actions = identical outcomes.
+
+| Element | Probability | Location |
+|---------|------------|----------|
+| Transient staging failure | 8% per deploy | `deploy_to_staging()` |
+| Rollback regression | 25% per rollback | `rollback()` |
+| Deploy quality | 70% clean / 20% minor / 10% unstable | `deploy_to_production()` |
+| Compound incident | 30% in random_incident | `RandomIncidentScenario.setup()` |
+| Initial health variance | ±10 CPU, ±15 latency | `RandomIncidentScenario.setup()` |
+
+Determinism guarantee: `reset()` re-seeds the RNG from fixed task seeds. Two resets with the same task produce identical initial states.
+
 ## Setup
 
 ```bash

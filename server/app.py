@@ -97,7 +97,7 @@ async def run_baseline():
 
 
 @app.post("/grader")
-async def run_grader(task_name: str = "clean_deploy"):
+async def run_grader(task_name: str = ""):
     """Score from active session's episode history."""
     from server.graders import grade_task as _grade_task
 
@@ -107,8 +107,10 @@ async def run_grader(task_name: str = "clean_deploy"):
     if not env.get_episode_history():
         return {"task": env.get_task_name(), "score": 0.0, "error": "No steps taken. Call /step first."}
     active_task = env.get_task_name()
-    if task_name and task_name != "clean_deploy" and task_name != active_task:
-        return {"task": task_name, "score": 0.0, "error": f"Task mismatch: active session is '{active_task}', not '{task_name}'."}
+    if task_name and task_name != active_task:
+        return {"task": task_name, "score": 0.0, "error": f"Task mismatch: requested '{task_name}' but active task is '{active_task}'."}
+    if not task_name:
+        task_name = active_task
     score = _grade_task(
         env.get_task_name(),
         env.get_episode_history(),

@@ -329,16 +329,22 @@ def grade_random_incident(episode_history, engine):
     system_health = engine.get_system_health()
     score += (system_health / 100.0) * 0.25
 
-    # Config fixed (0.20)
+    # Config fixed (0.20) — only if there was a config error to fix
     if failing_svc:
-        if not scenario.check_config_error(failing_name, failing_svc.config):
-            score += 0.20
-        elif getattr(scenario, 'failure_type', '') == 'degraded_performance':
-            # No config error — check if agent actually improved the service
-            if failing_svc.error_rate < 5.0 and failing_svc.health.value == "healthy":
-                score += 0.20  # Fully recovered
-            elif failing_svc.error_rate < 10.0:
-                score += 0.10  # Partially improved
+        had_config_error = getattr(scenario, 'failure_type', '') in ('config_error', 'capacity_limit', 'certificate_expiry')
+        if had_config_error and not scenario.check_config_error(failing_name, failing_svc.config):
+            score += 0.20  # Actually fixed the config error
+        elif had_config_error:
+            score += 0.0  # Config error still present
+        else:
+            # No config error for this failure type (degraded_performance, memory_leak)
+            # Redistribute to "service restored via other means" (deploy/rollback)
+            if failing_svc.health.value == "healthy" and failing_svc.error_rate < 2.0:
+                score += 0.20  # Fully restored without config fix
+            elif failing_svc.health.value == "healthy":
+                score += 0.10  # Partially restored
+            elif failing_svc.error_rate < 5.0:
+                score += 0.05  # Some improvement
 
     # No collateral damage (0.10) — outcome-based, not procedure-based
     any_broke = any(entry.get("broke_healthy", False) for entry in episode_history)

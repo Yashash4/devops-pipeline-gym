@@ -666,7 +666,7 @@ class CascadingFailureScenario(Scenario):
             "2026-04-01T12:00:04.001Z WARN  [cache-service] com.pipeline.cache.EvictionPolicy — LRU eviction stalled. Cache hit rate dropped to 12.3% (was 94.2%). Memory: 490MB/512MB — near capacity.",
             "2026-04-01T12:00:05.112Z WARN  [cache-service] com.pipeline.health.HealthCheck — Readiness probe DEGRADED. Connection pool saturated. Response time 2000ms (threshold: 500ms).",
             "2026-04-01T12:00:05.334Z DEBUG [cache-service] com.pipeline.gc.GCMonitor — GC pause: 89ms (Full GC), heap: 480MB/512MB. Memory pressure from connection pool backlog.",
-            "2026-04-01T12:00:06.001Z INFO  [cache-service] com.pipeline.ops.ConfigAdvisor — Recommended: increase redis.max_connections from 5 to at least 50 for production workload. Current setting is development default.",
+            "2026-04-01T12:00:06.001Z WARN  [cache-service] com.pipeline.ops.ConfigAdvisor — Connection pool size (5) is critically low for current workload. 100% pool utilization sustained for 15 minutes.",
         ]
 
         engine.services["auth-service"] = ServiceState(
@@ -831,8 +831,8 @@ class CapacityCrisisScenario(Scenario):
             "2026-04-01T16:30:01.001Z WARN  [database-primary] Connection pool utilization: 94% (47/50 active). Queue depth: 23 pending requests.",
             "2026-04-01T16:30:02.112Z WARN  [database-primary] Slow query detected: SELECT * FROM orders WHERE user_id IN (SELECT...) -- 1.2s execution time. Sequential scan on orders table (2.4M rows).",
             "2026-04-01T16:30:03.334Z INFO  [database-primary] Autovacuum running on users table. Last vacuum: 6 hours ago.",
-            "2026-04-01T16:30:04.001Z WARN  [database-primary] shared_buffers=4GB may be insufficient for current connection count. Consider increasing to 8GB.",
-            "2026-04-01T14:02:00.001Z WARN  [database-primary] shared_buffers=4GB may be insufficient for current connection load. Consider increasing to 8GB for optimal performance.",
+            "2026-04-01T16:30:04.001Z WARN  [database-primary] shared_buffers=4GB under heavy load. Buffer cache hit ratio: 62% (optimal: >95%). Disk I/O wait increasing.",
+            "2026-04-01T14:02:00.001Z WARN  [database-primary] Memory pressure: shared_buffers at capacity. Page eviction rate 3x normal. Queries spilling to disk.",
         ]
 
         engine.services["auth-service"] = ServiceState(
@@ -1089,13 +1089,13 @@ class RandomIncidentScenario(Scenario):
         elif failure_type == "capacity_limit":
             capacity_configs = {
                 "cache-service": ("redis.max_connections", "5",
-                                  "Redis connection pool exhausted (5/5). Increase redis.max_connections."),
+                                  "Redis connection pool exhausted (5/5). All slots occupied by long-running queries."),
                 "auth-service": ("rate_limit_per_minute", "50",
-                                 "Rate limiter triggered at 50/min. Increase rate_limit_per_minute."),
+                                 "Rate limiter triggered at 50/min. Requests being throttled. Throughput severely limited."),
                 "api-gateway": ("database.pool_size", "2",
-                                "Connection pool exhausted (2/2). Increase database.pool_size."),
+                                "Database connection pool exhausted (2/2). Queries queuing. Latency spiking."),
                 "web-frontend": ("cdn.enabled", "false",
-                                 "CDN disabled. All requests hitting origin. Enable cdn.enabled."),
+                                 "CDN disabled. All static asset requests hitting origin server. Bandwidth saturated."),
             }
             key, bad_val, hint = capacity_configs[failing_service]
             svc.config[key] = bad_val
@@ -1115,12 +1115,12 @@ class RandomIncidentScenario(Scenario):
             svc.logs.append(
                 f"2026-04-01T14:05:00.001Z WARN  [{failing_service}] "
                 f"GC thrashing detected. Memory at {svc.memory_percent:.0f}%. "
-                f"Heap nearly exhausted. Recommend restart or redeploy with increased heap."
+                f"Full GC every 2s, only reclaiming 3% heap each cycle."
             )
             svc.logs.append(
                 f"2026-04-01T14:05:01.001Z ERROR [{failing_service}] "
-                f"OOM risk — memory {svc.memory_percent:.0f}%, GC unable to reclaim. "
-                f"Deploy fresh instance to resolve memory leak."
+                f"OOM risk — memory {svc.memory_percent:.0f}%, heap fragmentation severe. "
+                f"Object retention growing linearly. Old gen 98% full."
             )
 
         elif failure_type == "certificate_expiry":
@@ -1130,8 +1130,8 @@ class RandomIncidentScenario(Scenario):
             svc.config["tls_cert_valid"] = "false"
             svc.logs.append(
                 f"2026-04-01T14:05:00.001Z ERROR [{failing_service}] "
-                f"TLS certificate expired. HTTPS connections failing. "
-                f"Deploy with renewed certificate to restore service."
+                f"TLS certificate expired. HTTPS handshake failures at {svc.error_rate:.0f}/s. "
+                f"Clients receiving SSL_ERROR_EXPIRED_CERT_ALERT."
             )
             svc.logs.append(
                 f"2026-04-01T14:05:01.001Z WARN  [{failing_service}] "
