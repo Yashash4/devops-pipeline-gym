@@ -832,6 +832,7 @@ class CapacityCrisisScenario(Scenario):
             "2026-04-01T16:30:02.112Z WARN  [database-primary] Slow query detected: SELECT * FROM orders WHERE user_id IN (SELECT...) -- 1.2s execution time. Sequential scan on orders table (2.4M rows).",
             "2026-04-01T16:30:03.334Z INFO  [database-primary] Autovacuum running on users table. Last vacuum: 6 hours ago.",
             "2026-04-01T16:30:04.001Z WARN  [database-primary] shared_buffers=4GB may be insufficient for current connection count. Consider increasing to 8GB.",
+            "2026-04-01T14:02:00.001Z WARN  [database-primary] shared_buffers=4GB may be insufficient for current connection load. Consider increasing to 8GB for optimal performance.",
         ]
 
         engine.services["auth-service"] = ServiceState(
@@ -978,7 +979,7 @@ class RandomIncidentScenario(Scenario):
 
         failing_candidates = ["api-gateway", "cache-service", "auth-service", "web-frontend"]
         failing_service = rng.choice(failing_candidates)
-        failure_types = ["config_error", "degraded_performance", "capacity_limit"]
+        failure_types = ["config_error", "degraded_performance", "capacity_limit", "memory_leak", "certificate_expiry"]
         failure_type = rng.choice(failure_types)
         severity = rng.choice(["moderate", "severe"])
 
@@ -1105,11 +1106,72 @@ class RandomIncidentScenario(Scenario):
                 f"2026-04-01T14:05:00.001Z ERROR [{failing_service}] {hint}"
             )
 
+        elif failure_type == "memory_leak":
+            svc.memory_percent = round(85.0 + rng.uniform(0, 10), 1)
+            svc.cpu_percent = round(60.0 + rng.uniform(0, 15), 1)
+            svc.health = ServiceHealth.DEGRADED
+            svc.error_rate = round(3.0 + rng.uniform(0, 5), 2)
+            svc.latency_ms = round(200.0 + rng.uniform(0, 300), 1)
+            svc.logs.append(
+                f"2026-04-01T14:05:00.001Z WARN  [{failing_service}] "
+                f"GC thrashing detected. Memory at {svc.memory_percent:.0f}%. "
+                f"Heap nearly exhausted. Recommend restart or redeploy with increased heap."
+            )
+            svc.logs.append(
+                f"2026-04-01T14:05:01.001Z ERROR [{failing_service}] "
+                f"OOM risk — memory {svc.memory_percent:.0f}%, GC unable to reclaim. "
+                f"Deploy fresh instance to resolve memory leak."
+            )
+
+        elif failure_type == "certificate_expiry":
+            svc.health = ServiceHealth.DEGRADED
+            svc.error_rate = round(20.0 + rng.uniform(0, 10), 2)
+            svc.latency_ms = round(100.0 + rng.uniform(0, 200), 1)
+            svc.config["tls_cert_valid"] = "false"
+            svc.logs.append(
+                f"2026-04-01T14:05:00.001Z ERROR [{failing_service}] "
+                f"TLS certificate expired. HTTPS connections failing. "
+                f"Deploy with renewed certificate to restore service."
+            )
+            svc.logs.append(
+                f"2026-04-01T14:05:01.001Z WARN  [{failing_service}] "
+                f"SSL handshake failures: {svc.error_rate:.0f}/s. "
+                f"Clients receiving certificate validation errors."
+            )
+
+        # 30% chance of compound incident (2 services failing)
+        self.secondary_service = None
+        if rng.random() < 0.3:
+            remaining = [s for s in failing_candidates if s != failing_service]
+            if remaining:
+                self.secondary_service = rng.choice(remaining)
+                secondary_type = rng.choice(failure_types)
+                secondary_svc = engine.services[self.secondary_service]
+                secondary_svc.health = ServiceHealth.DEGRADED
+                secondary_svc.error_rate = round(5.0 + rng.uniform(0, 8), 2)
+                secondary_svc.latency_ms = round(150.0 + rng.uniform(0, 200), 1)
+                secondary_svc.logs.append(
+                    f"2026-04-01T14:06:00.001Z WARN  [{self.secondary_service}] "
+                    f"{secondary_type.replace('_', ' ')} detected — service degraded"
+                )
+
+        # Randomize initial health levels for non-failing services
+        for name, svc_state in engine.services.items():
+            if name != failing_service and name != self.secondary_service:
+                svc_state.cpu_percent = round(max(5.0, min(60.0, svc_state.cpu_percent + rng.uniform(-10, 10))), 1)
+                svc_state.latency_ms = round(max(10.0, min(80.0, svc_state.latency_ms + rng.uniform(-5, 15))), 1)
+
+        compound_note = ""
+        if self.secondary_service:
+            compound_note = (
+                f" Additionally, {self.secondary_service} is also showing signs of degradation. "
+                f"Multiple services may need attention."
+            )
         self.task_description = (
             f"INCIDENT: {failing_service} is experiencing issues "
             f"({failure_type.replace('_', ' ')}). Severity: {severity}. "
             f"Investigate logs and config to diagnose the root cause, "
-            f"then fix the issue and stabilize the system."
+            f"then fix the issue and stabilize the system.{compound_note}"
         )
         self.goal = (
             f"Restore {failing_service} to healthy state. "
@@ -1137,6 +1199,8 @@ class RandomIncidentScenario(Scenario):
         """Check if config has an error based on the generated scenario."""
         if service_name != self.failing_service:
             return False
+        if self.failure_type == "certificate_expiry":
+            return config.get("tls_cert_valid") == "false"
         if self.failure_type not in ('config_error', 'capacity_limit'):
             return False
         config_errors = {

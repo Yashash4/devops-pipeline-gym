@@ -25,7 +25,7 @@ def calculate_reward(prev_snapshot, current_snapshot, action, viewed_actions,
     """
     Outcome-based reward. No procedure bonuses. No early returns.
     ALL actions go through the full reward pipeline.
-    Returns a float bounded to [-0.35, +0.20].
+    Returns a float bounded to [-0.35, +0.30].
     """
     reward = 0.0
 
@@ -101,4 +101,4 @@ def calculate_reward(prev_snapshot, current_snapshot, action, viewed_actions,
 
     # 7. Apply task urgency scaling and bound
     reward *= TASK_URGENCY.get(task_name, 1.0)
-    return max(min(reward, 0.20), -0.35)
+    return max(min(reward, 0.30), -0.35)

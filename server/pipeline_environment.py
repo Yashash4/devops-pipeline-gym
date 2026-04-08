@@ -7,7 +7,6 @@
 """DevOps Pipeline Environment Implementation."""
 
 import os
-import random
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
@@ -209,19 +208,22 @@ class PipelineEnvironment(Environment):
         raw_statuses = self._engine.get_service_statuses()
         filtered_statuses = []
         for svc in raw_statuses:
-            has_logs = f"logs:{svc.name}" in self._investigated_services
+            investigated = (
+                f"logs:{svc.name}" in self._investigated_services
+                or f"config:{svc.name}" in self._investigated_services
+            )
             filtered_statuses.append(ServiceStatus(
                 name=svc.name,
                 health=svc.health,
                 current_version=svc.current_version,
-                # Always visible: high-level numbers so agent sees something is wrong
-                error_rate=svc.error_rate,
-                request_latency_ms=svc.request_latency_ms,
+                # Metrics visible only after investigation
+                error_rate=svc.error_rate if investigated else 0.0,
+                request_latency_ms=svc.request_latency_ms if investigated else 0.0,
                 active_connections=svc.active_connections,
                 last_deploy_timestamp=svc.last_deploy_timestamp,
                 # Hidden until view_logs: detailed resource usage
-                cpu_percent=svc.cpu_percent if has_logs else 0.0,
-                memory_percent=svc.memory_percent if has_logs else 0.0,
+                cpu_percent=svc.cpu_percent if investigated else 0.0,
+                memory_percent=svc.memory_percent if investigated else 0.0,
             ))
 
         # Append investigation hint to goal
@@ -241,7 +243,7 @@ class PipelineEnvironment(Environment):
                 if investigated:
                     alerts.append(f"CRITICAL: {name} is DOWN")
                 else:
-                    alerts.append(f"CRITICAL: {name} is DOWN — investigate with view_logs to see details")
+                    alerts.append(f"ALERT: {name} appears down — use view_logs to investigate")
             elif svc_state.health == ServiceHealth.DEGRADED:
                 if investigated:
                     alerts.append(
@@ -249,7 +251,7 @@ class PipelineEnvironment(Environment):
                         f"(lat={svc_state.latency_ms:.0f}ms, err={svc_state.error_rate:.1f}/s)"
                     )
                 else:
-                    alerts.append(f"WARNING: {name} degraded — investigate with view_logs to see details")
+                    alerts.append(f"ALERT: {name} appears degraded — use view_logs to investigate")
             elif investigated and svc_state.cpu_percent > 80:
                 alerts.append(f"CAUTION: {name} CPU high ({svc_state.cpu_percent:.0f}%)")
         # Add dependency chain hints for degraded services

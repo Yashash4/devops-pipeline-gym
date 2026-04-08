@@ -21,6 +21,19 @@ CI/CD deployment management is the most common engineering workflow at companies
 
 This environment is useful for training RL agents to assist with deployment workflows, evaluating LLM reasoning under ambiguity and time pressure, and benchmarking investigation-before-action behavior. **Novel for OpenEnv**: No CI/CD pipeline environment exists on the Hub.
 
+## Why This Environment Matters
+
+CI/CD pipeline management is the most common engineering workflow at Meta, Google, and Amazon — every SRE team performs incident response daily. This environment fills a gap: no CI/CD pipeline environment exists on the OpenEnv Hub.
+
+This environment trains agents to:
+- **Investigate before acting** — partial observability forces information gathering
+- **Diagnose root causes** — cascading failures require tracing through dependency chains
+- **Make trade-off decisions** — every action has side effects (deploy spikes CPU, rollback risks regression)
+- **Act under time pressure** — health degrades each step in incident tasks
+- **Choose between valid strategies** — judgment_call has 3 resolution paths with different risk/reward profiles
+
+The large gap between LLM baseline (0.18–0.70) and optimal (0.63–0.98) demonstrates significant room for RL training improvement across the full skill spectrum.
+
 ## Service Dependency Graph
 
 ```
@@ -67,7 +80,7 @@ database-primary is approaching capacity limits under a traffic surge. CPU climb
 - **Key challenge**: Proactive intervention — increase max_connections and shared_buffers before tipping points trigger cascading collapse
 
 ### Task 6: Random Incident (Variable — Procedural Generation)
-Procedurally generated incident from a seed. The failing service (api-gateway, cache-service, auth-service, or web-frontend), failure type (config_error, degraded_performance, or capacity_limit), and severity (moderate or severe) are all randomized. Different seeds produce different scenarios — infinite variation for curriculum learning.
+Procedurally generated incident from a seed. The failing service (api-gateway, cache-service, auth-service, or web-frontend), failure type (config_error, degraded_performance, capacity_limit, memory_leak, or certificate_expiry), and severity (moderate or severe) are all randomized. 30% chance of compound incident (two services failing simultaneously). Different seeds produce different scenarios — infinite variation for curriculum learning.
 - **Max steps**: 15
 - **Services**: All 5 (one randomly failing)
 - **Key challenge**: Read the task description to identify the failing service and failure type, investigate, diagnose, and fix — with no prior knowledge of what's broken
@@ -79,7 +92,7 @@ The `random_incident` task generates unique scenarios from a seed, enabling:
 - **Generalization testing**: Verify agents handle novel failure combinations
 - **Infinite training data**: Every seed produces a different incident
 
-Failure space: 4 services x 3 failure types x 2 severities = 24 distinct failure configurations, each with continuous parameter variation from the RNG.
+Failure space: 5 failure types × 4 services × 2 severities = 40 primary configurations, with 30% compound incidents and randomized initial conditions — hundreds of unique scenarios.
 
 ## Action Space
 
@@ -114,7 +127,7 @@ Failure space: 4 services x 3 failure types x 2 severities = 24 distinct failure
 
 ## Reward Design
 
-Dense per-step reward that creates a learnable gradient for RL training. Investigation rewards use **diminishing-returns exploration** — first investigation of an unhealthy service gives +0.04, with decay as more services are investigated. Health improvements give proportional reward via system health delta (+0.005 per 1% improvement). **Sub-goal milestones** reward intermediate progress: config fixes (+0.08), migrations (+0.06), and alert resolution (+0.03). Breaking healthy services is heavily penalized (-0.30). All grading is outcome-based — no procedure-based criteria. Rewards are **task-adaptive** — harder tasks with time pressure get steeper gradients (1.0x–1.5x urgency scaling), creating a curriculum-aware reward landscape. Rewards are bounded [-0.35, +0.20] per step to prevent training instability.
+Dense per-step reward that creates a learnable gradient for RL training. Investigation rewards use **diminishing-returns exploration** — first investigation of an unhealthy service gives +0.04, with decay as more services are investigated. Health improvements give proportional reward via system health delta (+0.005 per 1% improvement). **Sub-goal milestones** reward intermediate progress: config fixes (+0.08), migrations (+0.06), and alert resolution (+0.03). Breaking healthy services is heavily penalized (-0.30). All grading is outcome-based — no procedure-based criteria. Rewards are **task-adaptive** — harder tasks with time pressure get steeper gradients (1.0x–1.5x urgency scaling), creating a curriculum-aware reward landscape. Rewards are bounded [-0.35, +0.30] per step to prevent training instability.
 
 | Signal | Reward | Condition |
 |--------|--------|-----------|
@@ -130,6 +143,14 @@ Dense per-step reward that creates a learnable gradient for RL training. Investi
 | Repeated investigation | -0.01/-0.03 | Same view on same target (-0.03 if consecutive) |
 | Repeated exact action | -0.02 | Same action_type + service as last step |
 
+### Reward Shaping Theory
+
+The health delta component (+0.005 per 1% system health improvement) approximates potential-based reward shaping (Ng et al., 1999), where Φ(s) = system_health/100. This preserves optimal policy while providing continuous gradient signal.
+
+Investigation bonuses use count-based exploration decay: reward = base × 1/(1 + 0.3n), consistent with Bellemare et al. (2016). This incentivizes initial exploration while preventing reward hacking through repeated view actions.
+
+Task urgency scaling (1.0×–1.5×) implements curriculum-aware reward calibration — harder tasks receive steeper gradients to maintain learning signal despite longer optimal trajectories.
+
 ## Baseline Scores
 
 Model: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Router
@@ -144,6 +165,17 @@ Model: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Router
 | random_incident (seed 6006) | Variable | 0.350 | 0.982 | +0.632 |
 
 LLM baselines re-calibrated after environment tuning (v2). Optimal scores from scripted expert trajectories. The large gap between LLM baseline and optimal demonstrates significant room for RL training improvement — the environment produces meaningful reward signal across the full skill spectrum. The `random_incident` task generates unique scenarios from each seed, enabling curriculum learning.
+
+### Seed Curriculum for RL Training
+
+The `random_incident` task generates unique scenarios from each seed via `DEVOPS_SEED` env var. With 5 failure types, compound incidents, and randomized initial conditions, the configuration space produces hundreds of distinct scenarios.
+
+**Recommended curriculum:**
+- Seeds 1–20: Single-service failures, moderate severity (warm-up)
+- Seeds 21–60: Mix of single and compound incidents (core training)
+- Seeds 61–100: Severe failures with compound incidents (advanced)
+
+Set `DEVOPS_SEED` at reset time (reads from env var each episode).
 
 ## Example Episode Trajectory
 
@@ -176,12 +208,14 @@ Step 5: approve("All services healthy")  → reward +0.03  (episode complete)
 
 ## Formal MDP Description
 
-- **State space S**: 5 services × (health ∈ {healthy, degraded, down}, cpu ∈ [0,100], memory ∈ [0,100], error_rate ∈ [0,50], latency ∈ [0,5000], config: Dict[str,str]) + pipeline status + migration status + alert list. Partially observable — CPU/memory hidden until investigated.
-- **Action space A**: 9 discrete action types with parameterized service targets. |A| ≈ 9 × 5 services = 45 effective actions.
-- **Transition T(s'|s,a)**: Deterministic core with stochastic elements (8% transient staging failure, 25% rollback regression, deploy quality variance). Seeded RNG ensures reproducibility.
-- **Reward R(s,a,s')**: Dense, bounded [-0.35, +0.20] per step. Potential-based health delta + milestone rewards + exploration bonuses with diminishing returns. Task-adaptive urgency scaling (1.0×–1.5×).
-- **Episode length**: 12–20 steps depending on task. Terminates on approve/abort/max_steps/catastrophic failure (health < 20%).
-- **Discount factor recommendation**: γ = 0.99 (short episodes, dense rewards).
+| Property | Description |
+|----------|-------------|
+| **State space S** | 5 services × (health ∈ {healthy, degraded, down}, cpu ∈ [0,100], memory ∈ [0,100], error_rate ∈ [0,50], latency ∈ [0,5000], config: Dict) + pipeline status + migration status + alerts. Partially observable — CPU/memory/latency/error_rate hidden until investigated. |
+| **Action space A** | 9 discrete action types × parameterized service targets. ~45 effective actions. |
+| **Transition T** | Deterministic core with stochastic elements (8% transient staging failure, 25% rollback regression, deploy quality variance). Seeded RNG ensures reproducibility. |
+| **Reward R** | Dense, bounded [-0.35, +0.30] per step. Potential-based health delta + milestone rewards + exploration bonuses with diminishing returns. Task-adaptive urgency scaling (1.0×–1.5×). |
+| **Episode length** | 12–20 steps depending on task. Terminates on approve/abort/max_steps/catastrophic failure (health < 20%). |
+| **Discount factor** | Recommended γ = 0.99 (short episodes, dense rewards). |
 
 ## Setup
 

@@ -258,9 +258,15 @@ def grade_capacity_crisis(episode_history, engine):
 
     # Root cause: database protected (0.30)
     if db:
-        max_conn = int(db.config.get("max_connections", "50"))
+        try:
+            max_conn = int(db.config.get("max_connections", "50"))
+        except (ValueError, TypeError):
+            max_conn = 50
         shared_buf = db.config.get("shared_buffers", "4GB")
-        shared_gb = int(shared_buf.replace("GB", "")) if "GB" in str(shared_buf) else 4
+        try:
+            shared_gb = int(shared_buf.replace("GB", "")) if "GB" in str(shared_buf) else 4
+        except (ValueError, TypeError):
+            shared_gb = 4
         if max_conn >= 100 and db.cpu_percent < 85 and shared_gb >= 6:
             score += 0.30  # Both configs optimized
         elif max_conn >= 100 and db.cpu_percent < 85:
@@ -340,6 +346,13 @@ def grade_random_incident(episode_history, engine):
         score += 0.10
     elif system_health > 60:
         score += 0.05
+
+    # Compound incident bonus (0.10)
+    secondary_name = getattr(scenario, 'secondary_service', None)
+    if secondary_name:
+        secondary_svc = engine.services.get(secondary_name)
+        if secondary_svc and secondary_svc.health.value == "healthy":
+            score += 0.10
 
     # Efficiency (0.10)
     steps = len(episode_history)

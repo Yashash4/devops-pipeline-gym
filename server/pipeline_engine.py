@@ -176,6 +176,8 @@ class ServiceState:
                 # Fully recovered
                 self.latency_ms = self._recovery_target_latency
                 self.error_rate = self._recovery_target_error_rate
+                if self.health == ServiceHealth.DEGRADED and self.error_rate < 5.0:
+                    self.health = ServiceHealth.HEALTHY
             else:
                 # Interpolate toward target
                 progress = 1.0 - (self._recovery_steps_remaining / (self._recovery_steps_remaining + 1))
@@ -492,15 +494,21 @@ class PipelineEngine:
         for edit in edits:
             result = svc.set_config(edit.key, edit.value)
             results.append(result)
-        # If the config error is now fixed and service was degraded, reset staging
-        # so the agent can re-deploy through staging with the corrected config
+        # If the config error is now fixed and service was degraded, start
+        # staged recovery (2 steps) instead of instant heal
         if svc.health == ServiceHealth.DEGRADED and not self.scenario.check_config_error(service_name, svc.config):
             svc.staging_deployed = False
             svc.staging_verified = False
-            svc.health = ServiceHealth.HEALTHY
-            svc.error_rate = round(0.1 * self._rng.uniform(0.9, 1.1), 3)
-            svc.latency_ms = round(50.0 * self._rng.uniform(0.8, 1.2), 1)
-            results.append(f"Config fix detected for {service_name}. Service health restored. Ready for re-deploy.")
+            # Immediate PARTIAL improvement
+            svc.error_rate = round(svc.error_rate * 0.5, 2)
+            svc.latency_ms = round(svc.latency_ms * 0.6, 1)
+            # Set up 2-step recovery to full health (reuse tick_recovery pattern)
+            svc._recovery_steps_remaining = 2
+            svc._recovery_target_latency = round(50.0 * self._rng.uniform(0.8, 1.2), 1)
+            svc._recovery_target_error_rate = round(0.1 * self._rng.uniform(0.9, 1.1), 3)
+            # Don't set health to HEALTHY yet — let tick_recovery handle it
+            # once error_rate drops below threshold on next steps
+            results.append(f"Config fix detected for {service_name}. Service improving — full recovery in ~2 steps. Ready for re-deploy.")
         return "\n".join(results)
 
     def _run_migration(self, migration_name, migration_type):
