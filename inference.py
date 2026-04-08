@@ -188,7 +188,7 @@ def parse_llm_action(text):
 async def run_task(client, env, task_name):
     rewards = []
     steps_taken = 0
-    score = 0.0
+    score = 0.001
     success = False
     max_steps = MAX_STEPS_PER_TASK.get(task_name, 20)
     max_reward = MAX_TOTAL_REWARD.get(task_name, 1.0)
@@ -263,8 +263,8 @@ async def run_task(client, env, task_name):
             if done:
                 break
 
-        score = sum(rewards) / max_reward if max_reward > 0 else 0.0
-        score = min(max(score, 0.0), 1.0)
+        score = sum(rewards) / max_reward if max_reward > 0 else 0.001
+        score = min(max(score, 0.001), 0.999)
         success = score >= SUCCESS_SCORE_THRESHOLD
 
     except Exception as e:
