@@ -217,9 +217,13 @@ class PipelineEnvironment(Environment):
             recovery = "stable"
             if svc_state and hasattr(svc_state, '_recovery_steps_remaining') and svc_state._recovery_steps_remaining > 0:
                 recovery = f"stabilizing ({svc_state._recovery_steps_remaining} steps remaining)"
+            # Mask health for uninvestigated unhealthy services
+            shown_health = svc.health
+            if not investigated and svc.health.value != "healthy":
+                shown_health = ServiceHealth.UNKNOWN
             filtered_statuses.append(ServiceStatus(
                 name=svc.name,
-                health=svc.health,
+                health=shown_health,
                 current_version=svc.current_version,
                 # Metrics visible only after investigation
                 error_rate=svc.error_rate if investigated else 0.0,
@@ -261,11 +265,11 @@ class PipelineEnvironment(Environment):
                     uninvestigated_alerts += 1
             elif investigated and svc_state.cpu_percent > 80:
                 alerts.append(f"CAUTION: {name} CPU high ({svc_state.cpu_percent:.0f}%)")
-        if uninvestigated_alerts > 0:
-            alerts.append(f"ALERT: {uninvestigated_alerts} service(s) may have issues — use view_logs to investigate")
-            # Show recovery status
+            # Recovery status alert — inside the loop, for THIS service
             if hasattr(svc_state, '_recovery_steps_remaining') and svc_state._recovery_steps_remaining > 0:
                 alerts.append(f"INFO: {name} recovering — stabilizing ({svc_state._recovery_steps_remaining} steps remaining)")
+        if uninvestigated_alerts > 0:
+            alerts.append(f"ALERT: {uninvestigated_alerts} service(s) may have issues — use view_logs to investigate")
         # Add dependency chain hints for investigated degraded services only
         for name, svc_state in self._engine.services.items():
             investigated = (
