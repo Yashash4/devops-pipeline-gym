@@ -84,7 +84,7 @@ async def run_baseline():
     """Return pre-recorded baseline scores. Does NOT run inference.py."""
     return {
         "scores": {
-            "clean_deploy": 0.585,
+            "clean_deploy": 0.700,
             "broken_pipeline": 0.482,
             "judgment_call": 0.184,
             "cascading_failure": 0.280,
@@ -92,7 +92,7 @@ async def run_baseline():
             "random_incident": 0.350,
         },
         "model": "Qwen/Qwen2.5-72B-Instruct",
-        "note": "Recorded from inference.py run on 2026-04-04.",
+        "note": "Baselines re-calibrated after environment tuning for clean_deploy (v2). Recorded 2026-04-08.",
     }
 
 

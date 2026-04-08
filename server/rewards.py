@@ -86,7 +86,12 @@ def calculate_reward(prev_snapshot, current_snapshot, action, viewed_actions,
             else:
                 reward += 0.02 * decay_factor
         else:
-            reward -= 0.01
+            # Stronger penalty for consecutive repeat of same view action
+            current_action_key = f"{action.action_type.value}:{action.service_name or 'global'}"
+            if last_action_key and current_action_key == last_action_key:
+                reward -= 0.03  # Consecutive spam = harsh penalty
+            else:
+                reward -= 0.01  # Non-consecutive repeat = mild penalty
 
     # 6. Repeated exact action penalty (non-view actions)
     if action.action_type not in (ActionType.VIEW_PIPELINE, ActionType.VIEW_LOGS, ActionType.VIEW_CONFIG):

@@ -213,16 +213,14 @@ def grade_cascading_failure(episode_history, engine):
     score += 0.20 * (system_health / 100.0)
 
     # Dependency health outcome: was cache-service healthy when api-gateway deployed?
-    # This is outcome-based: checks the STATE at deploy time, not step ordering.
+    # Uses deploy-time snapshot recorded in episode_history for grader integrity.
     api_deployed_with_healthy_dep = False
     for entry in episode_history:
-        action = entry.get("action", {})
-        if action.get("action_type") == "deploy" and action.get("service_name") == "api-gateway":
-            # Check if cache-service was healthy at this point
-            # We check the engine's final state for cache-service health
-            if cache_svc and cache_svc.health.value == "healthy":
+        cache_health = entry.get("cache_health_at_deploy")
+        if cache_health is not None:
+            if cache_health == "healthy":
                 api_deployed_with_healthy_dep = True
-                break
+            break
     # Also award if api-gateway was never deployed (agent focused on root cause only)
     # and cache-service ended healthy
     if not api_deployed_with_healthy_dep:
@@ -312,7 +310,7 @@ def grade_random_incident(episode_history, engine):
     """
     score = 0.0
     scenario = engine.scenario
-    failing_name = getattr(scenario, '_failing_service', None)
+    failing_name = getattr(scenario, 'failing_service', None)
     failing_svc = engine.services.get(failing_name) if failing_name else None
 
     # Failing service restored (0.35)
@@ -329,7 +327,7 @@ def grade_random_incident(episode_history, engine):
     if failing_svc:
         if not scenario.check_config_error(failing_name, failing_svc.config):
             score += 0.20
-        elif getattr(scenario, '_failure_type', '') == 'degraded_performance':
+        elif getattr(scenario, 'failure_type', '') == 'degraded_performance':
             # No config error — check if agent actually improved the service
             if failing_svc.error_rate < 5.0 and failing_svc.health.value == "healthy":
                 score += 0.20  # Fully recovered

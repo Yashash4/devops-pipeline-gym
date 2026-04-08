@@ -31,7 +31,7 @@ TASK_SEEDS = {
     "judgment_call": 3003,
     "cascading_failure": 4004,
     "capacity_crisis": 5005,
-    "random_incident": int(os.environ.get("DEVOPS_SEED", "6006")),
+    "random_incident": 6006,
 }
 
 TASK_MAX_STEPS = {
@@ -85,6 +85,8 @@ class PipelineEnvironment(Environment):
             PipelineEnvironment._register_callback(self)
 
         seed = TASK_SEEDS.get(self._task_name, 9999)
+        if self._task_name == "random_incident":
+            seed = int(os.environ.get("DEVOPS_SEED", str(seed)))
         scenario = load_scenario(self._task_name, seed)
         self._engine = PipelineEngine(scenario, seed)
         self._max_steps = TASK_MAX_STEPS.get(self._task_name, 15)
@@ -148,14 +150,22 @@ class PipelineEnvironment(Environment):
             if prev_svc.get("health") == "healthy" and curr_svc["health"] in ("degraded", "down"):
                 broke_healthy = True
 
-        self._episode_history.append({
+        history_entry = {
             "step": self._state.step_count,
             "action": action.model_dump(),
             "reward": reward,
             "error": None,
             "broke_healthy": broke_healthy,
             "system_health": self._engine.get_system_health(),
-        })
+        }
+
+        # Record cache health at deploy time for grader integrity
+        if action.action_type == ActionType.DEPLOY and action.service_name == "api-gateway":
+            cache_svc = self._engine.services.get("cache-service")
+            if cache_svc:
+                history_entry["cache_health_at_deploy"] = cache_svc.health.value
+
+        self._episode_history.append(history_entry)
 
         # Include config_snapshot if viewing/editing config
         config_snapshot = None

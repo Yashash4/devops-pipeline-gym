@@ -127,7 +127,7 @@ Dense per-step reward that creates a learnable gradient for RL training. Investi
 | Investigation (healthy svc) | +0.01× | First-time view on healthy service (with decay) |
 | Health improvement | +0.005/1% | System health delta |
 | Broke healthy service | -0.30 | Service went from healthy to degraded/down |
-| Repeated investigation | -0.01 | Same view action on same target |
+| Repeated investigation | -0.01/-0.03 | Same view on same target (-0.03 if consecutive) |
 | Repeated exact action | -0.02 | Same action_type + service as last step |
 
 ## Baseline Scores
@@ -136,14 +136,14 @@ Model: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Router
 
 | Task | Difficulty | LLM Baseline | Optimal | Gap |
 |------|-----------|-------------|---------|-----|
-| clean_deploy | Easy | 0.585 | 0.947 | +0.362 |
+| clean_deploy | Easy | 0.700 | 0.947 | +0.247 |
 | broken_pipeline | Medium | 0.482 | 0.890 | +0.408 |
 | judgment_call | Hard | 0.184 | 0.935 | +0.751 |
 | cascading_failure | Med-Hard | 0.280 | 0.883 | +0.603 |
 | capacity_crisis | Med-Hard | 0.250 | 0.634 | +0.384 |
 | random_incident (seed 6006) | Variable | 0.350 | 0.982 | +0.632 |
 
-LLM baselines from initial inference run. Optimal scores from scripted expert trajectories. The large gap between LLM baseline and optimal demonstrates significant room for RL training improvement — the environment produces meaningful reward signal across the full skill spectrum. The `random_incident` task generates unique scenarios from each seed, enabling curriculum learning.
+LLM baselines re-calibrated after environment tuning (v2). Optimal scores from scripted expert trajectories. The large gap between LLM baseline and optimal demonstrates significant room for RL training improvement — the environment produces meaningful reward signal across the full skill spectrum. The `random_incident` task generates unique scenarios from each seed, enabling curriculum learning.
 
 ## Example Episode Trajectory
 

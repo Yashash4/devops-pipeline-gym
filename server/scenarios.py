@@ -23,6 +23,8 @@ class Scenario:
         self.task_description = task_description
         self.goal = goal
         self.max_steps = max_steps
+        self.failing_service = None
+        self.failure_type = None
 
     def setup(self, engine):
         """Initialize engine state for this scenario. Override per task."""
@@ -967,8 +969,6 @@ class RandomIncidentScenario(Scenario):
             goal="",
             max_steps=15,
         )
-        self._failing_service = None
-        self._failure_type = None
 
     def setup(self, engine):
         from server.pipeline_engine import ServiceState
@@ -1114,8 +1114,8 @@ class RandomIncidentScenario(Scenario):
             f"Restore {failing_service} to healthy state. "
             f"Keep all other services healthy. Minimize downtime."
         )
-        self._failing_service = failing_service
-        self._failure_type = failure_type
+        self.failing_service = failing_service
+        self.failure_type = failure_type
 
         engine.commit_sha = "r4nd0m"
         engine.triggered_by = "monitoring-alert"
@@ -1134,9 +1134,9 @@ class RandomIncidentScenario(Scenario):
 
     def check_config_error(self, service_name, config):
         """Check if config has an error based on the generated scenario."""
-        if service_name != self._failing_service:
+        if service_name != self.failing_service:
             return False
-        if self._failure_type not in ('config_error', 'capacity_limit'):
+        if self.failure_type not in ('config_error', 'capacity_limit'):
             return False
         config_errors = {
             "cache-service": ("redis.host", "redis-staging.internal:6379"),
