@@ -353,17 +353,20 @@ def grade_random_incident(episode_history, engine):
     elif system_health > 60:
         score += 0.05
 
-    # Compound incident bonus (0.10)
-    secondary_name = getattr(scenario, 'secondary_service', None)
-    if secondary_name:
-        secondary_svc = engine.services.get(secondary_name)
-        if secondary_svc and secondary_svc.health.value == "healthy":
-            score += 0.10
+    # Compound vs efficiency — weights sum to exactly 1.00 either way
+    has_secondary = getattr(scenario, 'secondary_service', None) is not None
+    efficiency_weight = 0.00 if has_secondary else 0.10
 
-    # Efficiency (0.10)
+    # Efficiency (0.10 for single incidents, 0.00 for compound — replaced by compound bonus)
     steps = len(episode_history)
     max_steps = 15
-    score += max(0.0, 1.0 - steps / max_steps) * 0.10
+    score += max(0.0, 1.0 - steps / max_steps) * efficiency_weight
+
+    # Compound incident bonus (0.10) — replaces efficiency for compound incidents
+    if has_secondary:
+        secondary_svc = engine.services.get(scenario.secondary_service)
+        if secondary_svc and secondary_svc.health.value == "healthy":
+            score += 0.10
 
     return min(max(score, 0.0), 1.0)
 

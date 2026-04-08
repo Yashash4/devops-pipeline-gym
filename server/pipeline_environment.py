@@ -240,6 +240,7 @@ class PipelineEnvironment(Environment):
 
         # Build summary — only reveal details for investigated services
         alerts = []
+        uninvestigated_alerts = 0
         for name, svc_state in self._engine.services.items():
             investigated = (
                 f"logs:{name}" in self._investigated_services
@@ -249,7 +250,7 @@ class PipelineEnvironment(Environment):
                 if investigated:
                     alerts.append(f"CRITICAL: {name} is DOWN")
                 else:
-                    alerts.append(f"ALERT: {name} appears down — use view_logs to investigate")
+                    uninvestigated_alerts += 1
             elif svc_state.health == ServiceHealth.DEGRADED:
                 if investigated:
                     alerts.append(
@@ -257,15 +258,21 @@ class PipelineEnvironment(Environment):
                         f"(lat={svc_state.latency_ms:.0f}ms, err={svc_state.error_rate:.1f}/s)"
                     )
                 else:
-                    alerts.append(f"ALERT: {name} appears degraded — use view_logs to investigate")
+                    uninvestigated_alerts += 1
             elif investigated and svc_state.cpu_percent > 80:
                 alerts.append(f"CAUTION: {name} CPU high ({svc_state.cpu_percent:.0f}%)")
+        if uninvestigated_alerts > 0:
+            alerts.append(f"ALERT: {uninvestigated_alerts} service(s) may have issues — use view_logs to investigate")
             # Show recovery status
             if hasattr(svc_state, '_recovery_steps_remaining') and svc_state._recovery_steps_remaining > 0:
                 alerts.append(f"INFO: {name} recovering — stabilizing ({svc_state._recovery_steps_remaining} steps remaining)")
-        # Add dependency chain hints for degraded services
+        # Add dependency chain hints for investigated degraded services only
         for name, svc_state in self._engine.services.items():
-            if svc_state.health in (ServiceHealth.DEGRADED, ServiceHealth.DOWN):
+            investigated = (
+                f"logs:{name}" in self._investigated_services
+                or f"config:{name}" in self._investigated_services
+            )
+            if investigated and svc_state.health in (ServiceHealth.DEGRADED, ServiceHealth.DOWN):
                 upstream_issues = [
                     d for d in svc_state.dependencies
                     if d in self._engine.services

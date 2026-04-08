@@ -957,7 +957,10 @@ class CapacityCrisisScenario(Scenario):
     def check_config_error(self, service_name, config):
         """database-primary has max_connections=50 (too low for 4x traffic)."""
         if service_name == "database-primary":
-            return int(config.get("max_connections", "50")) < 75
+            try:
+                return int(config.get("max_connections", "50")) < 75
+            except (ValueError, TypeError):
+                return True  # Non-numeric = still broken
         return False
 
 

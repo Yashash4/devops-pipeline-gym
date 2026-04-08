@@ -151,6 +151,16 @@ Investigation bonuses use count-based exploration decay: reward = base × 1/(1 +
 
 Task urgency scaling (1.0×–1.5×) implements curriculum-aware reward calibration — harder tasks receive steeper gradients to maintain learning signal despite longer optimal trajectories.
 
+### Exploit Resistance
+
+| Attack Vector | Defense |
+|--------------|---------|
+| Repeated view_pipeline spam | Diminishing returns decay: reward = base/(1+0.3n), consecutive repeat -0.03 |
+| Break-then-fix exploit | -0.30 penalty exceeds +0.15 deploy + health recovery gains |
+| Step-stalling for investigation bonuses | Capped by diminishing returns + max_steps + efficiency grader component |
+| Config-grep pattern matching | Hard tasks removed prescriptive log messages; agent must diagnose from symptoms |
+| Ignoring secondary incidents | Compound incident grader awards 0.10 bonus for fixing secondary service |
+
 ## Baseline Scores
 
 Model: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Router
@@ -176,6 +186,17 @@ The `random_incident` task generates unique scenarios from each seed via `DEVOPS
 - Seeds 61–100: Severe failures with compound incidents (advanced)
 
 Set `DEVOPS_SEED` at reset time (reads from env var each episode).
+
+### Difficulty Analysis
+
+| Task | Decision Depth | Info Asymmetry | Time Pressure | Optimal Steps |
+|------|---------------|----------------|---------------|---------------|
+| clean_deploy | Low (1) | None | None | 4–6 |
+| broken_pipeline | Medium (3) | Medium | Low | 8–12 |
+| judgment_call | High (5) | High | High | 5–8 |
+| cascading_failure | High (4) | High | Medium | 6–10 |
+| capacity_crisis | Medium (3) | Medium | Medium | 6–10 |
+| random_incident | Variable | Variable | Variable | 5–12 |
 
 ## Example Episode Trajectory
 
