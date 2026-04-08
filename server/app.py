@@ -103,12 +103,12 @@ async def run_grader(task_name: str = ""):
 
     env = getattr(app.state, "active_env", None)
     if env is None or env.get_engine() is None:
-        return {"task": task_name, "score": 0.0, "error": "No active session. Call /reset first."}
+        return {"task": task_name, "score": 0.001, "error": "No active session. Call /reset first."}
     if not env.get_episode_history():
-        return {"task": env.get_task_name(), "score": 0.0, "error": "No steps taken. Call /step first."}
+        return {"task": env.get_task_name(), "score": 0.001, "error": "No steps taken. Call /step first."}
     active_task = env.get_task_name()
     if task_name and task_name != active_task:
-        return {"task": task_name, "score": 0.0, "error": f"Task mismatch: requested '{task_name}' but active task is '{active_task}'."}
+        return {"task": task_name, "score": 0.001, "error": f"Task mismatch: requested '{task_name}' but active task is '{active_task}'."}
     if not task_name:
         task_name = active_task
     score = _grade_task(

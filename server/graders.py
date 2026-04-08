@@ -385,5 +385,5 @@ def grade_task(task_name, episode_history, engine):
     """Grade an episode. Returns score in [0.0, 1.0]."""
     grader = GRADERS.get(task_name)
     if grader is None:
-        return 0.0
+        return 0.001
     return grader(episode_history, engine)
