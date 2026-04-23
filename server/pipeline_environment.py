@@ -17,6 +17,8 @@ from devops_pipeline_gym.models import (
     PipelineAction,
     PipelineObservation,
     Role,
+    RoleHistoryEntry,
+    ROLE_ACTIONS,
     ServiceHealth,
     ServiceStatus,
 )
@@ -81,6 +83,8 @@ class PipelineEnvironment(Environment):
         self._handoff_tracker = HandoffTracker()
         self._current_role: Role = Role.SRE
         self._episode_roles: list = []               # one Role entry per executed step
+        self._role_history: list = []                # list[RoleHistoryEntry] for observations
+        self._previous_handoff: str | None = None    # notes from the last action w/ handoff
         self._current_task: str = "clean_deploy"     # last task selected (incl. "adversarial")
         self._coordination_bonus_accumulated: float = 0.0
 
@@ -134,6 +138,8 @@ class PipelineEnvironment(Environment):
         self._role_router = RoleRouter()
         self._handoff_tracker = HandoffTracker()
         self._episode_roles = []
+        self._role_history = []
+        self._previous_handoff = None
         self._coordination_bonus_accumulated = 0.0
         self._current_role = Role.SRE  # default before next_role() below
         self._current_task = self._task_name
@@ -274,6 +280,42 @@ class PipelineEnvironment(Environment):
             if svc:
                 config_snapshot = svc.get_config_snapshot()
 
+        # Round 2 — role routing + hand-off scoring. Runs AFTER the Round 1
+        # execute path so we can feed the post-action state into next_role().
+        # Scores hand-off BEFORE advancing current_role so the transition
+        # pair (action.role -> next_role) is captured correctly.
+        interim_obs = self._build_observation(
+            last_action_result=result_text,
+            last_action_error=None,
+            done=done,
+            reward=reward,
+            config_snapshot=config_snapshot,
+        )
+        next_role = self._role_router.next_role(interim_obs)
+
+        if action.handoff_notes and next_role != action.role:
+            self._handoff_tracker.score_handoff(
+                from_role=action.role,
+                to_role=next_role,
+                notes=action.handoff_notes,
+                last_action=action,
+                current_services=self._engine.get_service_statuses(),
+            )
+
+        # Record which role just acted (history + episode-roles list).
+        self._role_router.record_role(action.role)
+        self._episode_roles.append(action.role)
+        self._role_history.append(RoleHistoryEntry(
+            step=self._state.step_count,
+            role=action.role,
+            action_type=action.action_type,
+        ))
+        # Expose the just-set handoff notes to the NEXT step's observation.
+        self._previous_handoff = action.handoff_notes
+
+        # Advance the environment's current_role for the next step.
+        self._current_role = next_role
+
         return self._build_observation(
             last_action_result=result_text,
             last_action_error=None,
@@ -406,15 +448,30 @@ class PipelineEnvironment(Environment):
             done=done,
             reward=reward,
             summary=summary,
+            # Round 2 fields — all backed by self state maintained in step()/reset().
+            current_role=self._current_role,
+            role_history=list(self._role_history),
+            previous_handoff=self._previous_handoff,
         )
 
     def _get_available_actions(self):
-        """Context-sensitive: only show valid actions."""
+        """Context-sensitive: only show valid actions, filtered to current role.
+
+        Round 2: the returned list is the intersection of (a) actions
+        valid in the current engine state and (b) actions permitted for
+        self._current_role. Round 1 clients that ignore this field keep
+        working; Round 2 clients use it to avoid submitting mismatched
+        roles.
+        """
         actions = ["view_pipeline", "view_logs", "approve", "abort"]
         if self._engine.has_services():
             actions.extend(["view_config", "edit_config", "deploy", "rollback"])
         if self._engine.has_pending_migrations():
             actions.append("run_migration")
+        # Filter by current role's permitted action set.
+        role_allowed = {a.value for a in ROLE_ACTIONS.get(self._current_role, [])}
+        if role_allowed:
+            actions = [a for a in actions if a in role_allowed]
         return actions
 
     def _validate_action(self, action):
