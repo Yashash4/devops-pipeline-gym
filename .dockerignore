@@ -1,0 +1,25 @@
+# Keep the HF Space image lean — it only runs the env server.
+# Training-time deps require CUDA and would bloat the CPU-only image.
+
+.git/
+.gitignore
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Local secrets — never bake into the image
+.env
+.env.local
+
+# Training-only artifacts (Phase 6+)
+training/
+requirements-training.txt
+outputs/
+dryrun/
+
+# Logs / local scratch
+_*.log
+_*.err
+
+# (Keep README.md — HF Space uses it as the space card.)

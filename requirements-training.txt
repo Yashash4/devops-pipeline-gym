@@ -1,0 +1,21 @@
+# Phase 6 training deps — install on GPU host (Kaggle T4 / H100).
+# NOT installed on the HF Space (CPU-only; these need CUDA).
+#
+# Usage:
+#   pip install -r requirements.txt            # env deps (incl. CPU-only)
+#   pip install -r requirements-training.txt   # GPU training + eval deps
+# OR:
+#   pip install -e '.[training]'               # same set via pyproject extras
+#
+# Unsloth pulls torch+bitsandbytes as transitive deps but we pin explicitly
+# so pip resolution is deterministic when the pre-compiled wheels race.
+
+torch>=2.3
+unsloth
+trl>=0.29.0
+peft>=0.10
+bitsandbytes>=0.43
+transformers>=4.45
+datasets>=2.20
+matplotlib>=3.8
+accelerate>=0.30

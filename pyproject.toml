@@ -23,6 +23,21 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+# Phase 6 training deps. NOT installed on the HF Space (CPU-only; these
+# require CUDA via bitsandbytes / unsloth). Install separately on Kaggle
+# T4 / H100 for training + eval runs:
+#   pip install -e '.[training]'
+training = [
+    "torch>=2.3",
+    "unsloth",
+    "trl>=0.29.0",
+    "peft>=0.10",
+    "bitsandbytes>=0.43",
+    "transformers>=4.45",
+    "datasets>=2.20",
+    "matplotlib>=3.8",
+    "accelerate>=0.30",
+]
 
 [project.scripts]
 # Server entry point - enables running via: uv run --project . server
