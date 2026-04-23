@@ -65,14 +65,14 @@ print("\n=== TEST 3: GET /health ===", flush=True)
 report("/health endpoint exists", True, "Verified in app.py line 65")
 
 # ============================================================================
-# TEST 4: GET /tasks — 4 tasks
+# TEST 4: GET /tasks — 6 tasks
 # ============================================================================
-print("\n=== TEST 4: GET /tasks — 4 tasks ===", flush=True)
+print("\n=== TEST 4: GET /tasks — 6 tasks ===", flush=True)
 from server.app import get_tasks
 tasks_resp = get_tasks()
 task_names = [t["name"] for t in tasks_resp["tasks"]]
-report("5 tasks returned", len(task_names) == 5, f"tasks={task_names}")
-for expected_task in ["clean_deploy", "broken_pipeline", "judgment_call", "cascading_failure", "capacity_crisis"]:
+report("6 tasks returned", len(task_names) == 6, f"tasks={task_names}")
+for expected_task in ["clean_deploy", "broken_pipeline", "judgment_call", "cascading_failure", "capacity_crisis", "random_incident"]:
     report(f"  task '{expected_task}' present", expected_task in task_names)
 
 
@@ -594,6 +594,216 @@ report("obs default role_history=[]",
        obs_default_round2.role_history == [])
 report("obs default previous_handoff=None",
        obs_default_round2.previous_handoff is None)
+
+
+# ============================================================================
+# TEST 13: Round 2 Phase 2 — Curriculum controller
+# ============================================================================
+print("\n=== TEST 13: Round 2 Phase 2 — Curriculum controller ===", flush=True)
+
+from devops_pipeline_gym.server.curriculum import (
+    CurriculumController,
+    MasteryTracker,
+)
+
+# test_mastery_tracker_records_episode
+mt = MasteryTracker()
+mt.record_episode("clean_deploy", "config_error", success=True, final_reward=0.9)
+report("test_mastery_tracker_records_episode: per_task updated",
+       mt.per_task["clean_deploy"] == (1, 1))
+report("test_mastery_tracker_records_episode: per_failure updated",
+       mt.per_failure["config_error"] == (1, 1))
+report("test_mastery_tracker_records_episode: recent_rewards len=1",
+       mt.recent_rewards == [0.9])
+report("test_mastery_tracker_records_episode: task_mastery 1.0",
+       mt.task_mastery("clean_deploy") == 1.0)
+report("test_mastery_tracker: task_mastery on unseen task = 0.0",
+       mt.task_mastery("never_seen") == 0.0)
+report("test_mastery_tracker: failure_mastery on unseen = 0.0",
+       mt.failure_mastery("never_seen") == 0.0)
+
+# test_mastery_tracker_per_task_score_separate_from_per_failure
+mt2 = MasteryTracker()
+mt2.record_episode("cascading_failure", "config_error", success=True, final_reward=0.8)
+mt2.record_episode("cascading_failure", "memory_leak", success=False, final_reward=0.2)
+report("per_task: cascading_failure mastery 0.5 (1/2)",
+       mt2.task_mastery("cascading_failure") == 0.5)
+report("per_failure: config_error mastery 1.0 (kept separate from task)",
+       mt2.failure_mastery("config_error") == 1.0)
+report("per_failure: memory_leak mastery 0.0",
+       mt2.failure_mastery("memory_leak") == 0.0)
+
+# Record with no failure_type — only per_task should update
+mt3 = MasteryTracker()
+mt3.record_episode("clean_deploy", None, success=True, final_reward=0.9)
+report("failure_type=None skips per_failure update",
+       mt3.per_failure == {} and mt3.per_task["clean_deploy"] == (1, 1))
+
+# Ring buffer: exceeds max_recent
+mt4 = MasteryTracker()
+mt4.max_recent = 5
+for i in range(8):
+    mt4.record_episode("clean_deploy", None, success=True, final_reward=float(i))
+report("recent_rewards capped at max_recent",
+       len(mt4.recent_rewards) == 5 and mt4.recent_rewards == [3.0, 4.0, 5.0, 6.0, 7.0])
+
+# test_mastery_tracker_plateau_detection_true_when_flat
+mt5 = MasteryTracker()
+for _ in range(10):
+    mt5.record_episode("clean_deploy", None, success=True, final_reward=0.7)
+report("test_mastery_tracker_plateau_detection_true_when_flat",
+       mt5.is_plateau() is True)
+
+# Plateau: fewer than window rewards → False
+mt6 = MasteryTracker()
+for _ in range(9):
+    mt6.record_episode("clean_deploy", None, success=True, final_reward=0.7)
+report("plateau False when fewer than plateau_window rewards",
+       mt6.is_plateau() is False)
+
+# test_mastery_tracker_plateau_detection_false_when_improving
+mt7 = MasteryTracker()
+for i in range(10):
+    # Rewards climb 0.0, 0.1, ..., 0.9 → high variance → NOT a plateau
+    mt7.record_episode("clean_deploy", None, success=i >= 5, final_reward=i / 10.0)
+report("test_mastery_tracker_plateau_detection_false_when_improving",
+       mt7.is_plateau() is False)
+
+# test_curriculum_picks_easy_with_low_mastery
+cc1 = CurriculumController()
+pick = cc1.pick_task()
+report("test_curriculum_picks_easy_with_low_mastery: fresh picks easy tier",
+       pick[0] in ("clean_deploy", "broken_pipeline") and pick[1] == 1,
+       f"got={pick}")
+
+# test_curriculum_escalates_after_10_successful_clean_deploy
+# Must use VARIED rewards — 10 identical rewards would trip plateau detection
+# and route to adversarial, masking the escalation we're testing.
+cc2 = CurriculumController()
+for i in range(10):
+    cc2.tracker.record_episode(
+        "clean_deploy", "config_error", success=True,
+        final_reward=0.6 + 0.3 * (i % 2),  # alternates 0.6/0.9 → var > threshold
+    )
+# clean_deploy mastery = 1.0, overall = 1/6 ≈ 0.167 → still easy tier.
+# Easy-tier picker chooses min-mastery candidate → broken_pipeline (not clean_deploy).
+pick2 = cc2.pick_task()
+report("test_curriculum_escalates_after_10_successful_clean_deploy: picks away from mastered task",
+       pick2[0] == "broken_pipeline",
+       f"got={pick2}")
+
+# Force overall mastery >= 0.3 (2 tasks mastered → overall = 2/6 ≈ 0.333) → medium tier
+cc3 = CurriculumController()
+for task in ("clean_deploy", "broken_pipeline"):
+    for _ in range(10):
+        cc3.tracker.record_episode(task, "config_error", success=True, final_reward=0.9)
+# Plateau kicks in (all rewards 0.9), so we get adversarial regardless. Test with varied rewards.
+cc3b = CurriculumController()
+for task in ("clean_deploy", "broken_pipeline"):
+    for i in range(10):
+        # Alternating rewards to avoid plateau — but task success is constant
+        cc3b.tracker.record_episode(task, "config_error", success=True, final_reward=0.4 + 0.3 * (i % 2))
+pick3 = cc3b.pick_task()
+report("curriculum escalates to medium tier after 2 tasks mastered",
+       pick3[0] in ("broken_pipeline", "cascading_failure", "capacity_crisis")
+       and pick3[1] is not None and 20 <= pick3[1] < 60,
+       f"got={pick3}")
+
+# Force overall >= 0.6 (4 tasks mastered) → hard tier
+cc4 = CurriculumController()
+for task in ("clean_deploy", "broken_pipeline", "cascading_failure", "capacity_crisis"):
+    for i in range(10):
+        cc4.tracker.record_episode(task, "config_error", success=True, final_reward=0.4 + 0.3 * (i % 2))
+pick4 = cc4.pick_task()
+report("curriculum escalates to hard tier after 4 tasks mastered",
+       pick4[0] in ("judgment_call", "random_incident")
+       and pick4[1] is not None and 60 <= pick4[1] < 100,
+       f"got={pick4}")
+
+# test_curriculum_returns_adversarial_on_plateau
+cc5 = CurriculumController()
+for _ in range(10):
+    cc5.tracker.record_episode("clean_deploy", "config_error", success=True, final_reward=0.5)
+report("test_curriculum_returns_adversarial_on_plateau",
+       cc5.pick_task() == ("adversarial", None))
+
+# Adversarial signal overrides tier selection (plateau takes priority)
+cc6 = CurriculumController()
+# Build up mastery to hard tier via varied rewards, then flatten to trigger plateau
+for task in ("clean_deploy", "broken_pipeline", "cascading_failure", "capacity_crisis"):
+    for i in range(5):
+        cc6.tracker.record_episode(task, "config_error", success=True, final_reward=0.3 + 0.4 * (i % 2))
+for _ in range(10):
+    cc6.tracker.record_episode("judgment_call", "config_error", success=False, final_reward=0.1)
+report("plateau signal beats tier escalation",
+       cc6.pick_task() == ("adversarial", None))
+
+# test_curriculum_get_weak_failure_types_returns_lowest_mastery
+cc7 = CurriculumController()
+# config_error succeeds 3/3 (mastery=1.0); memory_leak fails 3/3 (mastery=0.0).
+# The other three failure types are untried → also 0.0 mastery → tie with memory_leak.
+# What we can ASSERT: high-mastery type is excluded, and every returned type has mastery==0.0.
+for _ in range(3):
+    cc7.tracker.record_episode("clean_deploy", "config_error", success=True, final_reward=0.8)
+for _ in range(3):
+    cc7.tracker.record_episode("clean_deploy", "memory_leak", success=False, final_reward=0.2)
+weak = cc7.get_weak_failure_types(top_n=2)
+report("test_curriculum_get_weak_failure_types_returns_lowest_mastery: strongest excluded",
+       "config_error" not in weak, f"got={weak}")
+report("test_curriculum_get_weak_failure_types_returns_lowest_mastery: all returned have 0.0 mastery",
+       all(cc7.tracker.failure_mastery(ft) == 0.0 for ft in weak),
+       f"got={weak}")
+report("test_curriculum_get_weak_failure_types_returns_lowest_mastery: len == top_n",
+       len(weak) == 2, f"got={weak}")
+
+# When there's a clear gradient of masteries, weakest is returned first.
+cc7b = CurriculumController()
+# Force distinct mastery levels across failure types.
+cc7b.tracker.per_failure["config_error"] = (10, 10)         # 1.0
+cc7b.tracker.per_failure["degraded_performance"] = (7, 10)  # 0.7
+cc7b.tracker.per_failure["capacity_limit"] = (3, 10)        # 0.3
+cc7b.tracker.per_failure["memory_leak"] = (1, 10)           # 0.1
+cc7b.tracker.per_failure["certificate_expiry"] = (5, 10)    # 0.5
+ordered_weak = cc7b.get_weak_failure_types(top_n=3)
+report("get_weak_failure_types returns them lowest-first when gradient exists",
+       ordered_weak == ["memory_leak", "capacity_limit", "certificate_expiry"],
+       f"got={ordered_weak}")
+
+# top_n=0 returns empty, top_n >= len returns everything
+report("get_weak_failure_types(0) returns []",
+       cc7.get_weak_failure_types(top_n=0) == [])
+report("get_weak_failure_types(10) returns all 5",
+       len(cc7.get_weak_failure_types(top_n=10)) == 5)
+
+# Deterministic seed offset: same task → same seed across runs (no hash())
+cc8 = CurriculumController()
+cc9 = CurriculumController()
+# Drive both to medium tier with identical data
+for cc in (cc8, cc9):
+    for task in ("clean_deploy", "broken_pipeline"):
+        for i in range(10):
+            cc.tracker.record_episode(task, "config_error", success=True, final_reward=0.4 + 0.3 * (i % 2))
+report("seed offsets are deterministic across controller instances",
+       cc8.pick_task() == cc9.pick_task(),
+       f"pick8={cc8.pick_task()} pick9={cc9.pick_task()}")
+
+# Adversarial return has seed=None (caller must generate or fall back)
+cc10 = CurriculumController()
+for _ in range(10):
+    cc10.tracker.record_episode("clean_deploy", None, success=True, final_reward=0.5)
+adv_pick = cc10.pick_task()
+report("adversarial pick has seed=None",
+       adv_pick[0] == "adversarial" and adv_pick[1] is None)
+
+# test_round1_regression_still_passes — meta check: Phase 0 baseline tasks still reset
+# (already covered by earlier TEST 2 block + existing scoring tests above;
+#  this assertion is a trivial re-affirmation that curriculum didn't break imports.)
+os.environ["DEVOPS_TASK"] = "clean_deploy"
+from server.pipeline_environment import PipelineEnvironment as _PEnvAfterCurriculum
+_regr_env = _PEnvAfterCurriculum()
+_regr_obs = _regr_env.reset()
+report("test_round1_regression_still_passes: env still boots after curriculum added",
+       _regr_obs.services and _regr_obs.step_number == 0)
 
 
 # ============================================================================
