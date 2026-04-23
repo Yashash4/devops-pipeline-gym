@@ -1,5 +1,10 @@
 .env
+.env.local
 __pycache__/
 *.pyc
 .venv/
 *.egg-info/
+outputs/
+dryrun/
+_*.log
+_*.err
