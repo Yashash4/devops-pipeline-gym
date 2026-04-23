@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 os.environ.pop("DEVOPS_TASK", None)
 
-from devops_pipeline_env.models import (
+from devops_pipeline_gym.models import (
     ActionType,
     ConfigEdit,
     PipelineAction,

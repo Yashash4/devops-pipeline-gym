@@ -8,7 +8,7 @@
 
 import random
 
-from devops_pipeline_env.models import (
+from devops_pipeline_gym.models import (
     ActionType,
     AlertInfo,
     ConfigEdit,

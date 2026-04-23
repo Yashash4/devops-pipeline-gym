@@ -12,7 +12,7 @@ from uuid import uuid4
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
-from devops_pipeline_env.models import (
+from devops_pipeline_gym.models import (
     ActionType,
     PipelineAction,
     PipelineObservation,

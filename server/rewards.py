@@ -6,7 +6,7 @@
 
 """Outcome-based reward calculator for the DevOps Pipeline Environment."""
 
-from devops_pipeline_env.models import ActionType
+from devops_pipeline_gym.models import ActionType
 
 
 # Task urgency multipliers — harder tasks get steeper reward gradients

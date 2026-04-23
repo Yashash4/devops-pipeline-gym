@@ -12,7 +12,7 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from devops_pipeline_env.models import PipelineAction, PipelineObservation
+from devops_pipeline_gym.models import PipelineAction, PipelineObservation
 
 
 class DevopsPipelineEnv(

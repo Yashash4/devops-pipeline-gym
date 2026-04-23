@@ -6,8 +6,8 @@
 
 """DevOps Pipeline Environment."""
 
-from devops_pipeline_env.client import DevopsPipelineEnv
-from devops_pipeline_env.models import (
+from devops_pipeline_gym.client import DevopsPipelineEnv
+from devops_pipeline_gym.models import (
     ConfigEdit,
     PipelineAction,
     PipelineObservation,

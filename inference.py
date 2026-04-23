@@ -8,8 +8,8 @@ from typing import List, Optional
 
 from openai import OpenAI
 
-from devops_pipeline_env import DevopsPipelineEnv, PipelineAction
-from devops_pipeline_env.models import ActionType
+from devops_pipeline_gym import DevopsPipelineEnv, PipelineAction
+from devops_pipeline_gym.models import ActionType
 
 # --- Env Vars (EXACT hackathon requirements) ----------------------------------
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
@@ -20,7 +20,7 @@ API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
 IMAGE_NAME = os.getenv("IMAGE_NAME")
 
-BENCHMARK = "devops_pipeline_env"
+BENCHMARK = "devops_pipeline_gym"
 TASKS = ["clean_deploy", "broken_pipeline", "judgment_call", "cascading_failure", "capacity_crisis", "random_incident"]
 MAX_STEPS_PER_TASK = {"clean_deploy": 15, "broken_pipeline": 20, "judgment_call": 12, "cascading_failure": 15, "capacity_crisis": 15, "random_incident": 15}
 MAX_TOTAL_REWARD = {"clean_deploy": 0.70, "broken_pipeline": 0.85, "judgment_call": 0.65, "cascading_failure": 0.80, "capacity_crisis": 0.75, "random_incident": 0.70}

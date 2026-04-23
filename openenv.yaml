@@ -1,5 +1,5 @@
 spec_version: 1
-name: devops_pipeline_env
+name: devops_pipeline_gym
 type: space
 runtime: fastapi
 app: server.app:app

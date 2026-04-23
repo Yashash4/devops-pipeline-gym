@@ -8,14 +8,14 @@
 
 from openenv.core.env_server.http_server import create_app
 
-from devops_pipeline_env.models import PipelineAction, PipelineObservation
+from devops_pipeline_gym.models import PipelineAction, PipelineObservation
 from server.pipeline_environment import PipelineEnvironment
 
 app = create_app(
     PipelineEnvironment,
     PipelineAction,
     PipelineObservation,
-    env_name="devops_pipeline_env",
+    env_name="devops_pipeline_gym",
     max_concurrent_envs=1,
 )
 

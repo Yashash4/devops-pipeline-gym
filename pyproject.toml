@@ -9,7 +9,7 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "devops-pipeline-env"
+name = "devops-pipeline-gym"
 version = "0.1.0"
 description = "CI/CD Pipeline Management OpenEnv Environment"
 requires-python = ">=3.10"
@@ -25,10 +25,10 @@ dev = ["pytest"]
 
 [project.scripts]
 # Server entry point - enables running via: uv run --project . server
-# or: python -m devops_pipeline_env.server.app
-server = "devops_pipeline_env.server.app:main"
+# or: python -m devops_pipeline_gym.server.app
+server = "devops_pipeline_gym.server.app:main"
 
 [tool.setuptools]
 include-package-data = true
-packages = ["devops_pipeline_env", "devops_pipeline_env.server"]
-package-dir = { "devops_pipeline_env" = ".", "devops_pipeline_env.server" = "server" }
+packages = ["devops_pipeline_gym", "devops_pipeline_gym.server"]
+package-dir = { "devops_pipeline_gym" = ".", "devops_pipeline_gym.server" = "server" }

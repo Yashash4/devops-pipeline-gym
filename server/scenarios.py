@@ -6,7 +6,7 @@
 
 """Scenario definitions for the DevOps Pipeline Environment."""
 
-from devops_pipeline_env.models import AlertInfo, ServiceHealth
+from devops_pipeline_gym.models import AlertInfo, ServiceHealth
 
 
 class Scenario:
