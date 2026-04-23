@@ -111,12 +111,16 @@ async def run_grader(task_name: str = ""):
         return {"task": task_name, "score": 0.001, "error": f"Task mismatch: requested '{task_name}' but active task is '{active_task}'."}
     if not task_name:
         task_name = active_task
+    # Adversarial episodes (task_name "adv_*") share random_incident's structural
+    # base — route them to that grader via get_grader_task_name. Round 1 tasks
+    # return their own name from that helper, so behaviour is unchanged.
+    grader_task = env.get_grader_task_name() if hasattr(env, "get_grader_task_name") else active_task
     score = _grade_task(
-        env.get_task_name(),
+        grader_task,
         env.get_episode_history(),
         env.get_engine(),
     )
-    return {"task": env.get_task_name(), "score": score}
+    return {"task": active_task, "score": score}
 
 
 def main(host: str = "0.0.0.0", port: int = 8000):

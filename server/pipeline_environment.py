@@ -67,6 +67,10 @@ _TASK_FAILURE_TYPE = {
     "random_incident": None,  # varies per seed; curriculum treats as generic
 }
 
+# Maximum episode length we allow for LLM-generated adversarial scenarios —
+# prevents a runaway designer from claiming a 50-step episode.
+_ADVERSARIAL_MAX_STEPS_CAP = 20
+
 
 # Goal suffixes that hint at investigation without giving away answers
 _INVESTIGATION_HINTS = {
@@ -117,34 +121,34 @@ class PipelineEnvironment(Environment):
         """
         explicit_task = kwargs.get("task") or os.environ.get("DEVOPS_TASK")
         chosen_seed = None
+        adversarial_gen = None   # set only when designer returns a scenario
         if explicit_task:
             self._task_name = explicit_task
         else:
             # Round 2 — let the curriculum pick based on mastery/plateau signal.
             picked_task, seed_hint = self._curriculum.pick_task()
             if picked_task == "adversarial":
-                # Curriculum signalled plateau. Try the designer; on None
-                # (no API key / network / invalid JSON), fall back to a hard
-                # random_incident seed. Phase 5.2 does NOT yet translate the
-                # generated scenario into engine state — that wiring is deferred;
-                # for now we preserve the plateau signal by jumping to a hard seed.
+                # Plateau signal. Try the designer; on a valid GeneratedScenario
+                # we LOAD it into the engine (Phase 5.7 wiring). On None we
+                # fall through to random_incident at a hard-tier seed.
                 weak_spots = self._curriculum.get_weak_failure_types()
-                gen = self._designer.generate(weak_spots) if weak_spots else None
-                if gen is not None:
-                    # Stashed for future use (Phase 6+ can consume .to_scenario_spec()).
-                    self._last_adversarial_scenario = gen
-                self._task_name = "random_incident"
-                chosen_seed = 85  # hard-tier seed (60 + random_incident offset 25)
+                adversarial_gen = self._designer.generate(weak_spots) if weak_spots else None
+                if adversarial_gen is None:
+                    self._task_name = "random_incident"
+                    chosen_seed = 85
+                # else: _load_adversarial_scenario() sets task_name + seed below.
             else:
                 self._task_name = picked_task
                 chosen_seed = seed_hint
 
         # Canonical seed — explicit / fallback / curriculum-supplied.
-        if chosen_seed is None:
-            chosen_seed = TASK_SEEDS.get(self._task_name, 9999)
-        # random_incident honours DEVOPS_SEED for backward compat with Round 1 tests.
-        if self._task_name == "random_incident":
-            chosen_seed = int(os.environ.get("DEVOPS_SEED", str(chosen_seed)))
+        # Adversarial path derives its own seed inside _load_adversarial_scenario.
+        if adversarial_gen is None:
+            if chosen_seed is None:
+                chosen_seed = TASK_SEEDS.get(self._task_name, 9999)
+            # random_incident honours DEVOPS_SEED for backward compat with Round 1 tests.
+            if self._task_name == "random_incident":
+                chosen_seed = int(os.environ.get("DEVOPS_SEED", str(chosen_seed)))
 
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._episode_history = []
@@ -161,14 +165,21 @@ class PipelineEnvironment(Environment):
         self._previous_handoff = None
         self._coordination_bonus_accumulated = 0.0
         self._current_role = Role.SRE  # default before next_role() below
+        self._last_adversarial_scenario = None
         self._current_task = self._task_name
 
         if PipelineEnvironment._register_callback:
             PipelineEnvironment._register_callback(self)
 
-        scenario = load_scenario(self._task_name, chosen_seed)
-        self._engine = PipelineEngine(scenario, chosen_seed)
-        self._max_steps = TASK_MAX_STEPS.get(self._task_name, 15)
+        if adversarial_gen is not None:
+            # Phase 5.7 — LLM-generated scenario drives the episode.
+            # _load_adversarial_scenario sets self._engine, self._task_name,
+            # self._max_steps, and self._last_adversarial_scenario.
+            self._load_adversarial_scenario(adversarial_gen)
+        else:
+            scenario = load_scenario(self._task_name, chosen_seed)
+            self._engine = PipelineEngine(scenario, chosen_seed)
+            self._max_steps = TASK_MAX_STEPS.get(self._task_name, 15)
 
         # First-pass observation to feed next_role(); then update and rebuild
         # so the returned obs carries the correct current_role.
@@ -386,6 +397,85 @@ class PipelineEnvironment(Environment):
 
     def get_task_name(self):
         return self._task_name
+
+    def get_grader_task_name(self):
+        """Alias used by /grader to pick a Round 1 grader for adversarial episodes.
+
+        Adversarial scenarios have task_name `adv_*` but share the random_incident
+        structural base — so grading reuses the random_incident grader which is
+        generic enough to score on health delta / broke-healthy / resolution.
+        """
+        if self._task_name and self._task_name.startswith("adv_"):
+            return "random_incident"
+        return self._task_name
+
+    def _adversarial_seed(self, gen) -> int:
+        """Deterministic hard-tier seed derived from the scenario_id.
+
+        CLAUDE.md forbids Python's hash() for seeding (randomised per process);
+        use a character-sum checksum so runs across processes pick the same
+        seed for the same scenario_id. Hard-tier base = 60.
+        """
+        sid = getattr(gen, "scenario_id", "") or ""
+        checksum = sum(ord(c) for c in sid) % 40
+        return 60 + checksum
+
+    def _load_adversarial_scenario(self, gen) -> list:
+        """Bootstrap the engine from a GeneratedScenario.
+
+        Strategy — no Round 1 file edits:
+          1. Use `random_incident` as the structural base (initialises all
+             5 services + deps + baseline metrics via its public setup()).
+          2. Overlay the adversarial `initial_failures` by mutating
+             ServiceState attributes directly (all public, no underscore).
+          3. Stamp task_name `adv_<scenario_id>` so logs + the grader
+             redirect (via get_grader_task_name) are observable.
+
+        Returns the list of service names that actually received a failure
+        overlay (filtered against the engine's real 5-service roster so
+        any hallucinated name is dropped, not crashed on).
+        """
+        seed = self._adversarial_seed(gen)
+
+        # Build the base engine (public API only).
+        base = load_scenario("random_incident", seed)
+        self._engine = PipelineEngine(base, seed)
+
+        valid_services = set(self._engine.get_service_names())
+        failures_applied = []
+        for failure in (gen.initial_failures or []):
+            if not isinstance(failure, dict):
+                continue
+            svc_name = failure.get("service")
+            if svc_name not in valid_services:
+                # Defensive — designer hallucination; drop rather than crash.
+                continue
+            svc = self._engine.services.get(svc_name)
+            if svc is None:
+                continue
+            severity = str(failure.get("severity", "moderate")).lower()
+            if severity == "severe":
+                svc.health = ServiceHealth.DOWN
+                svc.latency_ms = 2000.0
+                svc.error_rate = 25.0
+                svc.cpu_percent = max(svc.cpu_percent, 90.0)
+            else:  # moderate (default) or unknown
+                svc.health = ServiceHealth.DEGRADED
+                svc.latency_ms = 500.0
+                svc.error_rate = 8.0
+                svc.cpu_percent = max(svc.cpu_percent, 75.0)
+            failures_applied.append(svc_name)
+
+        # Avoid double prefix when designer's scenario_id already starts with adv_
+        sid = gen.scenario_id or "unknown"
+        self._task_name = sid if sid.startswith("adv_") else f"adv_{sid}"
+        self._current_task = self._task_name
+        self._max_steps = min(
+            int(getattr(gen, "max_steps", _ADVERSARIAL_MAX_STEPS_CAP) or _ADVERSARIAL_MAX_STEPS_CAP),
+            _ADVERSARIAL_MAX_STEPS_CAP,
+        )
+        self._last_adversarial_scenario = gen
+        return failures_applied
 
     def _build_observation(self, last_action_result, last_action_error,
                            done, reward, config_snapshot=None):

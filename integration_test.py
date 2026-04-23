@@ -1377,6 +1377,165 @@ report("Round 1 optimal score reproducible after Phase 5 (clean_deploy)",
 
 
 # ============================================================================
+# TEST 17: Round 2 Phase 5.7 — Adversarial scenario wiring
+# ============================================================================
+print("\n=== TEST 17: Round 2 Phase 5.7 — Adversarial scenario wiring ===", flush=True)
+
+from devops_pipeline_gym.server.adversarial_designer import GeneratedScenario
+
+# Helper: construct a synthetic GeneratedScenario with known shape so tests
+# don't need the live Ollama API.
+def _make_fake_scenario(scenario_id, failures, max_steps=10):
+    return GeneratedScenario(
+        scenario_id=scenario_id,
+        description="test description",
+        goal="test goal",
+        root_cause="test root cause",
+        initial_failures=failures,
+        misleading_signals=["noise on unrelated metric"],
+        expected_diagnosis_steps=["view_logs cache-service", "view_config cache-service"],
+        expected_fix_actions=["edit_config cache-service"],
+        max_steps=max_steps,
+        difficulty="hard",
+    )
+
+
+# test_adversarial_scenario_loads_into_engine
+env_adv = PipelineEnvironment()
+env_adv.reset(task="clean_deploy")  # bootstrap any task first
+fake = _make_fake_scenario(
+    scenario_id="test_load",
+    failures=[
+        {"service": "cache-service", "failure_type": "config_error", "severity": "severe"},
+        {"service": "auth-service", "failure_type": "degraded_performance", "severity": "moderate"},
+    ],
+    max_steps=10,
+)
+applied = env_adv._load_adversarial_scenario(fake)
+report("test_adversarial_scenario_loads_into_engine: both services overlaid",
+       set(applied) == {"cache-service", "auth-service"},
+       f"applied={applied}")
+report("test_adversarial_scenario_loads_into_engine: severe → DOWN",
+       env_adv._engine.services["cache-service"].health.value == "down",
+       f"got={env_adv._engine.services['cache-service'].health.value}")
+report("test_adversarial_scenario_loads_into_engine: moderate → DEGRADED",
+       env_adv._engine.services["auth-service"].health.value == "degraded",
+       f"got={env_adv._engine.services['auth-service'].health.value}")
+report("test_adversarial_scenario_loads_into_engine: task_name is adv_*",
+       env_adv._task_name == "adv_test_load",
+       f"got={env_adv._task_name}")
+report("test_adversarial_scenario_loads_into_engine: max_steps from scenario",
+       env_adv._max_steps == 10, f"got={env_adv._max_steps}")
+report("test_adversarial_scenario_loads_into_engine: stashed on env",
+       env_adv._last_adversarial_scenario is fake)
+
+# test_adversarial_scenario_uses_only_5_services — hallucinated service names
+# must be dropped without crashing (defensive).
+env_adv2 = PipelineEnvironment()
+env_adv2.reset(task="clean_deploy")
+halluc = _make_fake_scenario(
+    scenario_id="halluc",
+    failures=[
+        {"service": "cache-service", "failure_type": "config_error", "severity": "severe"},
+        {"service": "3-memory-patch", "failure_type": "memory_leak", "severity": "severe"},  # fake
+        {"service": "full-stack", "failure_type": "cascading", "severity": "moderate"},      # fake
+    ],
+    max_steps=8,
+)
+applied2 = env_adv2._load_adversarial_scenario(halluc)
+report("test_adversarial_scenario_uses_only_5_services: only valid names applied",
+       set(applied2) == {"cache-service"},
+       f"applied={applied2}")
+report("test_adversarial_scenario_uses_only_5_services: engine has exactly 5 services",
+       set(env_adv2._engine.get_service_names()) ==
+       {"database-primary", "auth-service", "api-gateway", "cache-service", "web-frontend"})
+
+# Max-steps cap — designer claiming 50 must be clamped.
+env_adv3 = PipelineEnvironment()
+env_adv3.reset(task="clean_deploy")
+runaway = _make_fake_scenario(
+    scenario_id="runaway",
+    failures=[{"service": "cache-service", "failure_type": "config_error", "severity": "severe"}],
+    max_steps=50,
+)
+env_adv3._load_adversarial_scenario(runaway)
+report("adversarial max_steps clamped to env cap",
+       env_adv3._max_steps == 20, f"got={env_adv3._max_steps}")
+
+# Determinism: same scenario_id → same adversarial seed across instances
+env_d1 = PipelineEnvironment()
+env_d2 = PipelineEnvironment()
+report("_adversarial_seed is deterministic for scenario_id",
+       env_d1._adversarial_seed(fake) == env_d2._adversarial_seed(fake))
+# Different scenario_id should typically produce a different seed (hard tier range)
+different_seed_ok = env_d1._adversarial_seed(fake) != env_d1._adversarial_seed(halluc)
+report("_adversarial_seed varies by scenario_id",
+       different_seed_ok,
+       f"same_id={env_d1._adversarial_seed(fake)} diff_id={env_d1._adversarial_seed(halluc)}")
+
+# get_grader_task_name routes adv_* to random_incident
+env_adv4 = PipelineEnvironment()
+env_adv4.reset(task="clean_deploy")
+env_adv4._load_adversarial_scenario(fake)
+report("get_grader_task_name routes adv_* to random_incident",
+       env_adv4.get_grader_task_name() == "random_incident",
+       f"got={env_adv4.get_grader_task_name()}")
+# And leaves regular task_names untouched
+env_reg = PipelineEnvironment()
+env_reg.reset(task="broken_pipeline")
+report("get_grader_task_name leaves Round 1 tasks alone",
+       env_reg.get_grader_task_name() == "broken_pipeline")
+
+# test_adversarial_fallback_when_designer_returns_None — the reset() flow must
+# survive a designer that returns None by falling back to random_incident.
+# Monkey-patch the designer on an env instance BEFORE priming a plateau.
+env_fb = PipelineEnvironment()
+env_fb._designer.generate = lambda weak_spots, use_cache=True: None
+# Prime a plateau: 10 flat rewards on recent_rewards.
+for _ in range(10):
+    env_fb._curriculum.tracker.record_episode("clean_deploy", "config_error",
+                                               success=True, final_reward=0.7)
+# Trigger an autonomous reset (no DEVOPS_TASK, no explicit task).
+os.environ.pop("DEVOPS_TASK", None)
+obs_fb = env_fb.reset()
+report("test_adversarial_fallback_when_designer_returns_None: falls back to random_incident",
+       env_fb._task_name == "random_incident",
+       f"got={env_fb._task_name}")
+report("test_adversarial_fallback_when_designer_returns_None: _last_adversarial_scenario is None",
+       env_fb._last_adversarial_scenario is None)
+report("test_adversarial_fallback_when_designer_returns_None: obs returned normally",
+       obs_fb.services and len(obs_fb.services) >= 4)
+
+# And the happy path — designer succeeds → adversarial scenario loads.
+env_happy = PipelineEnvironment()
+env_happy._designer.generate = lambda weak_spots, use_cache=True: _make_fake_scenario(
+    "happy_adv",
+    [{"service": "api-gateway", "failure_type": "degraded_performance", "severity": "severe"}],
+    max_steps=8,
+)
+for _ in range(10):
+    env_happy._curriculum.tracker.record_episode("clean_deploy", "config_error",
+                                                  success=True, final_reward=0.7)
+os.environ.pop("DEVOPS_TASK", None)
+obs_happy = env_happy.reset()
+report("adversarial happy path: task_name = adv_happy_adv",
+       env_happy._task_name == "adv_happy_adv",
+       f"got={env_happy._task_name}")
+report("adversarial happy path: api-gateway is DOWN (severe)",
+       env_happy._engine.services["api-gateway"].health.value == "down")
+report("adversarial happy path: grader_task aliases to random_incident",
+       env_happy.get_grader_task_name() == "random_incident")
+
+# Round 1 regression — after all this, a plain reset with explicit task still works.
+os.environ["DEVOPS_TASK"] = "clean_deploy"
+env_regr57 = PipelineEnvironment()
+obs_regr57 = env_regr57.reset()
+_obs_step = env_regr57.step(PipelineAction(action_type=ActionType.VIEW_PIPELINE))
+report("Round 1 regression after Phase 5.7: clean_deploy still works",
+       obs_regr57.services and _obs_step.reward is not None and _obs_step.last_action_error is None)
+
+
+# ============================================================================
 # SUMMARY
 # ============================================================================
 print("\n" + "=" * 70, flush=True)
