@@ -6,7 +6,9 @@
 
 """Outcome-based reward calculator for the DevOps Pipeline Environment."""
 
-from devops_pipeline_gym.models import ActionType
+from typing import Iterable
+
+from devops_pipeline_gym.models import ActionType, ROLE_ACTIONS, Role
 
 
 # Task urgency multipliers — harder tasks get steeper reward gradients
@@ -102,3 +104,87 @@ def calculate_reward(prev_snapshot, current_snapshot, action, viewed_actions,
     # 7. Apply task urgency scaling and bound
     reward *= TASK_URGENCY.get(task_name, 1.0)
     return max(min(reward, 0.30), -0.35)
+
+
+# ─── Round 2 additions ─────────────────────────────────────────────────────
+#
+# Three independent signals added on top of the Round 1 base reward.
+# Each returns a DELTA; pipeline_environment.step() sums them and applies
+# the per-step bound [-0.40, +0.45].
+#
+# Gaming-resistance: handoff bonus is capped at +0.08 cumulative per episode
+# (caller tracks), specialisation bonus requires 2+ unique roles (no self-
+# play reward), role_alignment is only applied when role is explicitly set.
+
+# Round 2 — per-episode hard cap on accumulated coordination bonus.
+COORDINATION_BONUS_EPISODE_CAP = 0.08
+
+
+def role_alignment_reward(action, router) -> float:
+    """+0.02 when action matches the role's action set, -0.05 otherwise.
+
+    Caller is expected to invoke this only when `role` was EXPLICITLY set
+    on the action — otherwise every Round 1 DEPLOY action (default role=SRE)
+    would trigger -0.05 and regress scores. pipeline_environment enforces
+    the opt-in via model_fields_set.
+    """
+    if router.validate_action(action.role, action.action_type):
+        return 0.02
+    return -0.05
+
+
+def handoff_quality_reward(tracker, previous_role: Role, current_role: Role,
+                           coordination_accumulated: float) -> tuple[float, float]:
+    """Return (delta, new_accumulated). Reads the most-recent scored handoff.
+
+    Applies 0.02 × quality_score for the transition, capped so that
+    `coordination_accumulated + delta <= COORDINATION_BONUS_EPISODE_CAP`.
+    Returns 0 delta and unchanged accumulated when:
+      - previous_role == current_role (no transition)
+      - tracker has no handoffs (notes were empty/absent)
+      - the cap has already been hit
+    """
+    if previous_role == current_role:
+        return 0.0, coordination_accumulated
+    if not tracker.handoffs:
+        return 0.0, coordination_accumulated
+    recent = tracker.handoffs[-1]
+    # Only count the most-recent handoff if it corresponds to THIS transition.
+    if recent.from_role != previous_role or recent.to_role != current_role:
+        return 0.0, coordination_accumulated
+
+    raw = 0.02 * recent.quality_score
+    headroom = COORDINATION_BONUS_EPISODE_CAP - coordination_accumulated
+    if headroom <= 0:
+        return 0.0, coordination_accumulated
+    delta = min(raw, headroom)
+    return delta, coordination_accumulated + delta
+
+
+def role_specialization_bonus(episode_roles: Iterable) -> float:
+    """End-of-episode bonus based on unique roles used.
+
+    +0.10 when all 3 modes used, +0.03 when 2, else 0.0. Called only on
+    done=True. Cannot be gamed without actually issuing actions in each
+    mode (the env validates role on each step).
+    """
+    unique = {getattr(r, "value", r) for r in episode_roles}
+    if len(unique) >= 3:
+        return 0.10
+    if len(unique) == 2:
+        return 0.03
+    return 0.0
+
+
+# Final per-step reward bounds after combining Round 1 + Round 2 additions.
+# Round 1 base bounds to [-0.35, +0.30]. Round 2 additions on a good step:
+#   +0.02 (alignment) + 0.02 (handoff, capped) = +0.04  → peak step: +0.34
+#   plus end-of-episode +0.10 spec bonus on done: +0.44 → bound to +0.45.
+# Worst case: Round 1 -0.35 + -0.15 (role mismatch returned directly, no base)
+# isn't reached here — role mismatch short-circuits. Normal negative: -0.35.
+STEP_REWARD_MIN = -0.40
+STEP_REWARD_MAX = 0.45
+
+
+def bound_step_reward(reward: float) -> float:
+    return max(STEP_REWARD_MIN, min(STEP_REWARD_MAX, reward))

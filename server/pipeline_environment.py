@@ -26,7 +26,13 @@ from server.adversarial_designer import AdversarialDesigner
 from server.curriculum import CurriculumController
 from server.handoff_metrics import HandoffTracker
 from server.pipeline_engine import PipelineEngine
-from server.rewards import calculate_reward
+from server.rewards import (
+    bound_step_reward,
+    calculate_reward,
+    handoff_quality_reward,
+    role_alignment_reward,
+    role_specialization_bonus,
+)
 from server.roles import RoleRouter
 from server.scenarios import load_scenario
 
@@ -239,8 +245,8 @@ class PipelineEnvironment(Environment):
 
         current_state = self._engine.snapshot()
 
-        # Calculate outcome-based reward
-        reward = calculate_reward(
+        # Round 1 base reward (bounded [-0.35, +0.30] by calculate_reward).
+        round1_reward = calculate_reward(
             prev_state, current_state, action, self._viewed_actions,
             last_action_key=self._last_action_key, task_name=self._task_name,
         )
@@ -249,46 +255,22 @@ class PipelineEnvironment(Environment):
         # Check episode termination
         done = self._check_done(action)
 
-        # Track if we broke a healthy service (for grader)
-        broke_healthy = False
-        for name, curr_svc in current_state["services"].items():
-            prev_svc = prev_state["services"].get(name, {})
-            if prev_svc.get("health") == "healthy" and curr_svc["health"] in ("degraded", "down"):
-                broke_healthy = True
-
-        history_entry = {
-            "step": self._state.step_count,
-            "action": action.model_dump(),
-            "reward": reward,
-            "error": None,
-            "broke_healthy": broke_healthy,
-            "system_health": self._engine.get_system_health(),
-        }
-
-        # Record cache health at deploy time for grader integrity
-        if action.action_type == ActionType.DEPLOY and action.service_name == "api-gateway":
-            cache_svc = self._engine.services.get("cache-service")
-            if cache_svc:
-                history_entry["cache_health_at_deploy"] = cache_svc.health.value
-
-        self._episode_history.append(history_entry)
-
-        # Include config_snapshot if viewing/editing config
+        # Include config_snapshot if viewing/editing config (needed before we
+        # build any observation below).
         config_snapshot = None
         if action.action_type in (ActionType.VIEW_CONFIG, ActionType.EDIT_CONFIG):
             svc = self._engine.services.get(action.service_name)
             if svc:
                 config_snapshot = svc.get_config_snapshot()
 
-        # Round 2 — role routing + hand-off scoring. Runs AFTER the Round 1
-        # execute path so we can feed the post-action state into next_role().
-        # Scores hand-off BEFORE advancing current_role so the transition
-        # pair (action.role -> next_role) is captured correctly.
+        # ─── Round 2 — role routing + hand-off scoring + reward additions ──
+        # Score hand-off FIRST (before current_role is advanced) so the
+        # transition pair lines up with tracker.handoffs[-1].
         interim_obs = self._build_observation(
             last_action_result=result_text,
             last_action_error=None,
             done=done,
-            reward=reward,
+            reward=round1_reward,       # placeholder; final obs below uses combined
             config_snapshot=config_snapshot,
         )
         next_role = self._role_router.next_role(interim_obs)
@@ -302,7 +284,48 @@ class PipelineEnvironment(Environment):
                 current_services=self._engine.get_service_statuses(),
             )
 
-        # Record which role just acted (history + episode-roles list).
+        # Round 2 reward deltas — additive on top of Round 1 base.
+        round2_delta = 0.0
+        if role_was_explicit:
+            round2_delta += role_alignment_reward(action, self._role_router)
+        handoff_delta, self._coordination_bonus_accumulated = handoff_quality_reward(
+            self._handoff_tracker,
+            action.role,
+            next_role,
+            self._coordination_bonus_accumulated,
+        )
+        round2_delta += handoff_delta
+        if done:
+            # Include THIS action's role when computing specialisation since
+            # self._episode_roles is appended below (after reward combination).
+            round2_delta += role_specialization_bonus(
+                self._episode_roles + [action.role]
+            )
+
+        # Final bounded reward for this step.
+        reward = bound_step_reward(round1_reward + round2_delta)
+
+        # ── Round 1 history entry (uses final combined reward) ────────────
+        broke_healthy = False
+        for name, curr_svc in current_state["services"].items():
+            prev_svc = prev_state["services"].get(name, {})
+            if prev_svc.get("health") == "healthy" and curr_svc["health"] in ("degraded", "down"):
+                broke_healthy = True
+        history_entry = {
+            "step": self._state.step_count,
+            "action": action.model_dump(),
+            "reward": reward,
+            "error": None,
+            "broke_healthy": broke_healthy,
+            "system_health": self._engine.get_system_health(),
+        }
+        if action.action_type == ActionType.DEPLOY and action.service_name == "api-gateway":
+            cache_svc = self._engine.services.get("cache-service")
+            if cache_svc:
+                history_entry["cache_health_at_deploy"] = cache_svc.health.value
+        self._episode_history.append(history_entry)
+
+        # ── Advance Round 2 state for the NEXT step ────────────────────────
         self._role_router.record_role(action.role)
         self._episode_roles.append(action.role)
         self._role_history.append(RoleHistoryEntry(
@@ -310,10 +333,7 @@ class PipelineEnvironment(Environment):
             role=action.role,
             action_type=action.action_type,
         ))
-        # Expose the just-set handoff notes to the NEXT step's observation.
         self._previous_handoff = action.handoff_notes
-
-        # Advance the environment's current_role for the next step.
         self._current_role = next_role
 
         return self._build_observation(
