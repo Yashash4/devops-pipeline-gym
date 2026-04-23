@@ -168,6 +168,42 @@ class PipelineEnvironment(Environment):
 
         prev_state = self._engine.snapshot()
 
+        # Round 2 — role validation. Only enforced when the caller EXPLICITLY
+        # set `role` on the action (Pydantic's model_fields_set tells us).
+        # Round 1 clients that omit the field bypass this check — preserves
+        # backward-compat without compromising Round 2 policy enforcement.
+        role_was_explicit = "role" in action.model_fields_set
+        role_error = None
+        role_penalty = 0.0
+        if role_was_explicit:
+            if action.role != self._current_role:
+                role_error = (
+                    f"Role mismatch: action.role='{action.role.value}' but "
+                    f"environment current_role='{self._current_role.value}'"
+                )
+                role_penalty = -0.15
+            elif not self._role_router.validate_action(action.role, action.action_type):
+                role_error = (
+                    f"Action '{action.action_type.value}' is not permitted for "
+                    f"role '{action.role.value}' — allowed: "
+                    f"{[a.value for a in self._role_router.get_valid_actions(action.role)]}"
+                )
+                role_penalty = -0.10
+        if role_error:
+            self._episode_history.append({
+                "step": self._state.step_count,
+                "action": action.model_dump(),
+                "reward": role_penalty,
+                "error": role_error,
+            })
+            done = self._state.step_count >= self._max_steps
+            return self._build_observation(
+                last_action_result=None,
+                last_action_error=role_error,
+                done=done,
+                reward=role_penalty,
+            )
+
         # Validate action
         error = self._validate_action(action)
         if error:
