@@ -16,11 +16,16 @@ from devops_pipeline_gym.models import (
     ActionType,
     PipelineAction,
     PipelineObservation,
+    Role,
     ServiceHealth,
     ServiceStatus,
 )
+from server.adversarial_designer import AdversarialDesigner
+from server.curriculum import CurriculumController
+from server.handoff_metrics import HandoffTracker
 from server.pipeline_engine import PipelineEngine
 from server.rewards import calculate_reward
+from server.roles import RoleRouter
 from server.scenarios import load_scenario
 
 # Deterministic seeds per task
@@ -67,6 +72,17 @@ class PipelineEnvironment(Environment):
         self._viewed_actions = set()
         self._last_action_key = None
         self._investigated_services = set()  # e.g. "logs:api-gateway", "config:cache-service"
+        # Round 2 — role system + curriculum + adversarial designer + hand-off scoring.
+        # All are lazy / graceful: AdversarialDesigner tolerates a missing
+        # OLLAMA_API_KEY by returning None from generate(), callers fall back.
+        self._role_router = RoleRouter()
+        self._curriculum = CurriculumController()
+        self._designer = AdversarialDesigner()
+        self._handoff_tracker = HandoffTracker()
+        self._current_role: Role = Role.SRE
+        self._episode_roles: list = []               # one Role entry per executed step
+        self._current_task: str = "clean_deploy"     # last task selected (incl. "adversarial")
+        self._coordination_bonus_accumulated: float = 0.0
 
     def reset(self, seed=None, episode_id=None, **kwargs) -> PipelineObservation:
         """Initialize a new episode. Task from reset body, env var, or default."""
