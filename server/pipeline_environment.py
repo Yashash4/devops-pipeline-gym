@@ -55,6 +55,19 @@ TASK_MAX_STEPS = {
     "random_incident": 15,
 }
 
+# Map each task to its dominant failure type so curriculum can track mastery
+# per-failure-type without having to introspect the scenario internals.
+# Failure type names match CurriculumController._DEFAULT_FAILURE_TYPES.
+_TASK_FAILURE_TYPE = {
+    "clean_deploy": None,  # nothing broken → no failure-type signal
+    "broken_pipeline": "config_error",
+    "judgment_call": "degraded_performance",
+    "cascading_failure": "degraded_performance",
+    "capacity_crisis": "capacity_limit",
+    "random_incident": None,  # varies per seed; curriculum treats as generic
+}
+
+
 # Goal suffixes that hint at investigation without giving away answers
 _INVESTIGATION_HINTS = {
     "clean_deploy": " Use view_logs and view_config to inspect services before deploying.",
@@ -335,6 +348,23 @@ class PipelineEnvironment(Environment):
         ))
         self._previous_handoff = action.handoff_notes
         self._current_role = next_role
+
+        # ── Curriculum tracking — record the episode on the last step. ────
+        if done:
+            final_health = self._engine.get_system_health()
+            any_broke = any(
+                h.get("broke_healthy", False) for h in self._episode_history
+            )
+            success = final_health >= 50.0 and not any_broke
+            final_reward_sum = sum(
+                h.get("reward", 0.0) for h in self._episode_history
+            )
+            self._curriculum.tracker.record_episode(
+                task=self._task_name,
+                failure_type=_TASK_FAILURE_TYPE.get(self._task_name),
+                success=success,
+                final_reward=final_reward_sum,
+            )
 
         return self._build_observation(
             last_action_result=result_text,
