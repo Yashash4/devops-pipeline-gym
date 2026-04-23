@@ -22,6 +22,7 @@ Deliberately minimal. Does not:
 import json
 import logging
 import os
+import time
 from typing import Dict, Optional
 
 import httpx
@@ -30,10 +31,18 @@ logger = logging.getLogger(__name__)
 
 
 class OllamaClient:
-    """Minimal Ollama Cloud chat client."""
+    """Minimal Ollama Cloud chat client.
+
+    One initial attempt + 2 retries with 1s then 3s backoff. Any exception
+    (network, HTTP status, JSON decode, missing keys) becomes None rather
+    than bubbling up — callers (the adversarial designer) treat None as
+    "fall back to procedural random_incident".
+    """
 
     DEFAULT_HOST = "https://ollama.com"
     DEFAULT_TIMEOUT = 60.0
+    # Total attempts = 1 + len(BACKOFF_SCHEDULE).
+    BACKOFF_SCHEDULE = (1.0, 3.0)
 
     def __init__(
         self,
@@ -63,7 +72,7 @@ class OllamaClient:
         temperature: float = 0.7,
         max_tokens: int = 2048,
     ) -> Optional[str]:
-        """Plain-text completion via /api/chat. None on any failure."""
+        """Plain-text completion via /api/chat. None on any failure after retries."""
         if not self.api_key:
             return None
 
@@ -78,17 +87,39 @@ class OllamaClient:
             "stream": False,
         }
 
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                resp = client.post(
-                    f"{self.host}/api/chat", json=payload, headers=headers
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return data["message"]["content"]
-        except Exception as e:
-            logger.error("OllamaClient.generate failed (%s): %s", type(e).__name__, e)
-            return None
+        # Retry wrapper: 1 initial attempt + BACKOFF_SCHEDULE retries.
+        attempts = 1 + len(self.BACKOFF_SCHEDULE)
+        last_err: Optional[Exception] = None
+        for attempt in range(1, attempts + 1):
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    resp = client.post(
+                        f"{self.host}/api/chat", json=payload, headers=headers
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    content = data["message"]["content"]
+                # Treat empty body as a transient failure worth retrying.
+                if not content:
+                    raise ValueError("empty response body")
+                return content
+            except Exception as e:
+                last_err = e
+                if attempt < attempts:
+                    delay = self.BACKOFF_SCHEDULE[attempt - 1]
+                    logger.warning(
+                        "OllamaClient.generate attempt %d/%d failed (%s: %s); retrying in %.1fs",
+                        attempt, attempts, type(e).__name__, e, delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "OllamaClient.generate exhausted %d attempts (%s: %s)",
+                        attempts, type(e).__name__, e,
+                    )
+        # All attempts failed.
+        _ = last_err  # for clarity; already logged above
+        return None
 
     def generate_json(
         self,
