@@ -85,26 +85,75 @@ class PipelineEnvironment(Environment):
         self._coordination_bonus_accumulated: float = 0.0
 
     def reset(self, seed=None, episode_id=None, **kwargs) -> PipelineObservation:
-        """Initialize a new episode. Task from reset body, env var, or default."""
-        self._task_name = (
-            kwargs.get("task")
-            or os.environ.get("DEVOPS_TASK")
-            or "clean_deploy"
-        )
+        """Initialize a new episode.
+
+        Task selection priority (Round 2 additions are additive):
+          1. Explicit task in reset body (backward compat: kwargs['task'])
+          2. DEVOPS_TASK env var (Round 1 integration tests use this)
+          3. Curriculum pick (Round 2 autonomous mode)
+        """
+        explicit_task = kwargs.get("task") or os.environ.get("DEVOPS_TASK")
+        chosen_seed = None
+        if explicit_task:
+            self._task_name = explicit_task
+        else:
+            # Round 2 — let the curriculum pick based on mastery/plateau signal.
+            picked_task, seed_hint = self._curriculum.pick_task()
+            if picked_task == "adversarial":
+                # Curriculum signalled plateau. Try the designer; on None
+                # (no API key / network / invalid JSON), fall back to a hard
+                # random_incident seed. Phase 5.2 does NOT yet translate the
+                # generated scenario into engine state — that wiring is deferred;
+                # for now we preserve the plateau signal by jumping to a hard seed.
+                weak_spots = self._curriculum.get_weak_failure_types()
+                gen = self._designer.generate(weak_spots) if weak_spots else None
+                if gen is not None:
+                    # Stashed for future use (Phase 6+ can consume .to_scenario_spec()).
+                    self._last_adversarial_scenario = gen
+                self._task_name = "random_incident"
+                chosen_seed = 85  # hard-tier seed (60 + random_incident offset 25)
+            else:
+                self._task_name = picked_task
+                chosen_seed = seed_hint
+
+        # Canonical seed — explicit / fallback / curriculum-supplied.
+        if chosen_seed is None:
+            chosen_seed = TASK_SEEDS.get(self._task_name, 9999)
+        # random_incident honours DEVOPS_SEED for backward compat with Round 1 tests.
+        if self._task_name == "random_incident":
+            chosen_seed = int(os.environ.get("DEVOPS_SEED", str(chosen_seed)))
+
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._episode_history = []
         self._viewed_actions = set()
         self._last_action_key = None
         self._investigated_services = set()
+        # Round 2 per-episode reset. Curriculum + designer persist across
+        # episodes (they learn / cache); router + handoff tracker are
+        # per-episode state.
+        self._role_router = RoleRouter()
+        self._handoff_tracker = HandoffTracker()
+        self._episode_roles = []
+        self._coordination_bonus_accumulated = 0.0
+        self._current_role = Role.SRE  # default before next_role() below
+        self._current_task = self._task_name
+
         if PipelineEnvironment._register_callback:
             PipelineEnvironment._register_callback(self)
 
-        seed = TASK_SEEDS.get(self._task_name, 9999)
-        if self._task_name == "random_incident":
-            seed = int(os.environ.get("DEVOPS_SEED", str(seed)))
-        scenario = load_scenario(self._task_name, seed)
-        self._engine = PipelineEngine(scenario, seed)
+        scenario = load_scenario(self._task_name, chosen_seed)
+        self._engine = PipelineEngine(scenario, chosen_seed)
         self._max_steps = TASK_MAX_STEPS.get(self._task_name, 15)
+
+        # First-pass observation to feed next_role(); then update and rebuild
+        # so the returned obs carries the correct current_role.
+        temp_obs = self._build_observation(
+            last_action_result="Environment reset. Deployment pipeline initialized.",
+            last_action_error=None,
+            done=False,
+            reward=0.0,
+        )
+        self._current_role = self._role_router.next_role(temp_obs)
 
         return self._build_observation(
             last_action_result="Environment reset. Deployment pipeline initialized.",
