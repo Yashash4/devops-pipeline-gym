@@ -262,8 +262,8 @@ uv sync
 uv run python -m uvicorn server.app:app --host 0.0.0.0 --port 8000
 
 # Build and run with Docker
-docker build -t devops-pipeline-env .
-docker run -p 8000:8000 devops-pipeline-env
+docker build -t devops-pipeline-gym .
+docker run -p 8000:8000 devops-pipeline-gym
 
 # Test reset endpoint
 curl -X POST -H "Content-Type: application/json" -d '{}' http://localhost:8000/reset
@@ -277,7 +277,7 @@ uv run inference.py
 
 # Validate and deploy
 openenv validate
-openenv push --repo-id your-username/devops-pipeline-env
+openenv push --repo-id yashash045/devops-pipeline-gym
 ```
 
 ## API Endpoints
