@@ -807,6 +807,194 @@ report("test_round1_regression_still_passes: env still boots after curriculum ad
 
 
 # ============================================================================
+# TEST 14: Round 2 Phase 3 — Ollama client + Adversarial designer
+# ============================================================================
+print("\n=== TEST 14: Round 2 Phase 3 — Ollama client + designer ===", flush=True)
+
+# Load .env manually so downstream tests see OLLAMA_API_KEY / DESIGNER_MODEL
+# without requiring python-dotenv.
+_env_file = os.path.join(os.path.dirname(__file__), ".env")
+if os.path.exists(_env_file):
+    with open(_env_file) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if not _line or _line.startswith("#") or "=" not in _line:
+                continue
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
+
+from server.ollama_client import OllamaClient, _strip_code_fence
+from server.adversarial_designer import (
+    AdversarialDesigner,
+    GeneratedScenario,
+    DESIGNER_PROMPT,
+)
+
+# --- Offline tests (always run) ---------------------------------------------
+
+# test_ollama_client_graceful_without_key
+_saved_key = os.environ.pop("OLLAMA_API_KEY", None)
+try:
+    c_no_key = OllamaClient()
+    report("test_ollama_client_graceful_without_key: api_key is None",
+           c_no_key.api_key is None)
+    report("test_ollama_client_graceful_without_key: generate returns None",
+           c_no_key.generate("s", "u") is None)
+    # test_ollama_client_graceful_without_key_for_generate_json
+    report("test_ollama_client_graceful_without_key_for_generate_json",
+           c_no_key.generate_json("s", "u") is None)
+
+    # test_designer_initializes_without_crash (no API key)
+    d_no_key = AdversarialDesigner()
+    report("test_designer_initializes_without_crash",
+           d_no_key.model and d_no_key.client.api_key is None)
+    report("designer.generate returns None without key",
+           d_no_key.generate(["config_error"]) is None)
+    report("designer.generate([]) returns None",
+           d_no_key.generate([]) is None)
+finally:
+    if _saved_key is not None:
+        os.environ["OLLAMA_API_KEY"] = _saved_key
+
+# _strip_code_fence covers markdown ```json and plain ``` fences
+report("_strip_code_fence handles ```json fence",
+       _strip_code_fence("```json\n{\"a\":1}\n```") == '{"a":1}')
+report("_strip_code_fence handles bare ``` fence",
+       _strip_code_fence("```\n{\"a\":1}\n```") == '{"a":1}')
+report("_strip_code_fence leaves plain json alone",
+       _strip_code_fence('{"a":1}') == '{"a":1}')
+
+# test_designer_parse_rejects_incomplete_json (missing required field)
+d_parse = AdversarialDesigner()
+bad1 = d_parse._parse({"description": "x", "goal": "y"}, ["x"])
+report("test_designer_parse_rejects_incomplete_json: missing root_cause",
+       bad1 is None)
+bad2 = d_parse._parse({"description": "x", "goal": "y", "root_cause": "r"}, ["x"])
+report("designer._parse rejects missing initial_failures", bad2 is None)
+bad3 = d_parse._parse(
+    {"description": "x", "goal": "y", "root_cause": "r", "initial_failures": []},
+    ["x"],
+)
+report("designer._parse rejects empty initial_failures", bad3 is None)
+bad4 = d_parse._parse(
+    {"description": "x", "goal": "y", "root_cause": "r", "initial_failures": "not a list"},
+    ["x"],
+)
+report("designer._parse rejects non-list initial_failures", bad4 is None)
+
+# _parse accepts minimal valid
+good = d_parse._parse(
+    {
+        "description": "d",
+        "goal": "g",
+        "root_cause": "r",
+        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
+    },
+    ["config_error"],
+)
+report("designer._parse accepts minimal valid JSON",
+       good is not None and good.max_steps == 12 and good.difficulty == "hard")
+report("_parse falls back scenario_id when missing",
+       good is not None and good.scenario_id.startswith("adv_"),
+       f"got={good.scenario_id if good else 'None'}")
+
+# test_designer_cache_returns_same_scenario — monkey-patch generate_json
+# so we don't need a live LLM. Two calls with same weak_spots must return
+# the IDENTICAL object from cache (not a fresh parse).
+d_cache = AdversarialDesigner()
+_call_count = {"n": 0}
+def _fake_json(system, user, temperature=0.7, max_tokens=2048):
+    _call_count["n"] += 1
+    return {
+        "scenario_id": "adv_fake",
+        "description": "fake scenario",
+        "goal": "fake goal",
+        "root_cause": "fake cause",
+        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
+        "max_steps": 10,
+        "difficulty": "hard",
+    }
+d_cache.client.generate_json = _fake_json
+s1 = d_cache.generate(["config_error"])
+s2 = d_cache.generate(["config_error"])
+report("test_designer_cache_returns_same_scenario: identical object",
+       s1 is not None and s1 is s2)
+report("cache prevents second LLM call for same weak_spots",
+       _call_count["n"] == 1,
+       f"call_count={_call_count['n']}")
+# use_cache=False forces fresh call
+s3 = d_cache.generate(["config_error"], use_cache=False)
+report("use_cache=False bypasses cache",
+       _call_count["n"] == 2 and s3 is not None and s3 is not s1,
+       f"call_count={_call_count['n']}")
+# Different weak_spots → different cache key, new call
+s4 = d_cache.generate(["memory_leak"])
+report("different weak_spots → separate cache entry",
+       _call_count["n"] == 3 and s4 is not s1)
+
+# to_scenario_spec shape — what Phase 5 consumes
+spec_dict = good.to_scenario_spec()
+report("GeneratedScenario.to_scenario_spec has required keys",
+       set(spec_dict.keys()) == {"task_id", "description", "goal", "max_steps", "initial_failures"})
+
+# Designer respects DESIGNER_MODEL env var
+os.environ["DESIGNER_MODEL"] = "test-model:7b"
+d_envmodel = AdversarialDesigner()
+report("AdversarialDesigner reads DESIGNER_MODEL env var",
+       d_envmodel.model == "test-model:7b")
+os.environ.pop("DESIGNER_MODEL", None)
+# Explicit model arg wins over env
+os.environ["DESIGNER_MODEL"] = "env-model:7b"
+d_explicit = AdversarialDesigner(model="arg-model:7b")
+report("AdversarialDesigner explicit model overrides env",
+       d_explicit.model == "arg-model:7b")
+os.environ.pop("DESIGNER_MODEL", None)
+
+# Prompt template contains the weak_spots marker and the service list
+report("DESIGNER_PROMPT references weak_spots",
+       "{weak_spots}" in DESIGNER_PROMPT)
+report("DESIGNER_PROMPT lists all 5 services",
+       all(s in DESIGNER_PROMPT for s in
+           ["database-primary", "auth-service", "api-gateway", "cache-service", "web-frontend"]))
+
+# --- Live tests (only when OLLAMA_API_KEY is set) ---------------------------
+_live_key = os.environ.get("OLLAMA_API_KEY")
+if _live_key:
+    print("\n--- Live tests (OLLAMA_API_KEY present) ---", flush=True)
+    try:
+        # test_ollama_client_generate_json_returns_dict_live
+        live_client = OllamaClient()
+        live_ping = live_client.generate_json(
+            "Return strict JSON only.",
+            'Respond with {"ok": true, "ping": "pong"} and nothing else.',
+            temperature=0.0,
+            max_tokens=80,
+        )
+        report("test_ollama_client_generate_json_returns_dict_live",
+               isinstance(live_ping, dict),
+               f"got={live_ping}")
+
+        # test_designer_generates_valid_scenario_live
+        live_d = AdversarialDesigner()
+        live_s = live_d.generate(["config_error"])
+        live_ok = (
+            live_s is not None
+            and bool(live_s.description)
+            and bool(live_s.goal)
+            and bool(live_s.root_cause)
+            and isinstance(live_s.initial_failures, list)
+            and len(live_s.initial_failures) >= 1
+        )
+        report("test_designer_generates_valid_scenario_live",
+               live_ok,
+               f"desc={live_s.description if live_s else None}")
+    except Exception as _e:
+        report("live tests errored", False, f"exc={type(_e).__name__}: {_e}")
+else:
+    print("(skipping live tests — OLLAMA_API_KEY not set)", flush=True)
+
+
+# ============================================================================
 # SUMMARY
 # ============================================================================
 print("\n" + "=" * 70, flush=True)
