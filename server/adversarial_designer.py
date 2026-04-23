@@ -165,6 +165,22 @@ class AdversarialDesigner:
             logger.error("AdversarialDesigner._parse: initial_failures must be a non-empty list")
             return None
 
+        diag_raw = list(response.get("expected_diagnosis_steps") or [])
+        fix_raw = list(response.get("expected_fix_actions") or [])
+        budget = self._enforce_step_budget(diag_raw, fix_raw)
+        if budget is None:
+            logger.error(
+                "AdversarialDesigner._parse: step budget too low (diag=%d fix=%d total=%d, min=3) — rejecting",
+                len(diag_raw), len(fix_raw), len(diag_raw) + len(fix_raw),
+            )
+            return None
+        diag_steps, fix_steps = budget
+        if (len(diag_steps), len(fix_steps)) != (len(diag_raw), len(fix_raw)):
+            logger.warning(
+                "AdversarialDesigner._parse: step budget over 8 — truncated diag %d->%d, fix %d->%d",
+                len(diag_raw), len(diag_steps), len(fix_raw), len(fix_steps),
+            )
+
         scenario_id = response.get("scenario_id") or ("adv_" + "_".join(sorted(weak_spots))[:40])
 
         try:
@@ -175,8 +191,8 @@ class AdversarialDesigner:
                 root_cause=str(response["root_cause"]),
                 initial_failures=list(initial),
                 misleading_signals=list(response.get("misleading_signals") or []),
-                expected_diagnosis_steps=list(response.get("expected_diagnosis_steps") or []),
-                expected_fix_actions=list(response.get("expected_fix_actions") or []),
+                expected_diagnosis_steps=diag_steps,
+                expected_fix_actions=fix_steps,
                 max_steps=int(response.get("max_steps") or 12),
                 difficulty=str(response.get("difficulty") or "hard"),
                 raw_json=response,
@@ -184,6 +200,38 @@ class AdversarialDesigner:
         except (TypeError, ValueError) as e:
             logger.error("AdversarialDesigner._parse: coercion error: %s", e)
             return None
+
+    @staticmethod
+    def _enforce_step_budget(
+        diag: List[str],
+        fix: List[str],
+        min_total: int = 3,
+        max_total: int = 8,
+    ) -> Optional[tuple[List[str], List[str]]]:
+        """Clamp (diag, fix) lists to [min_total, max_total] total steps.
+
+        Returns None if total < min_total (not enough signal to train on).
+        If total > max_total: proportionally truncate, preserving at least
+        1 entry in each list. Ratio preserved to first rounding; favours diag
+        when a tie is possible (investigation-first scenarios).
+        """
+        total = len(diag) + len(fix)
+        if total < min_total:
+            return None
+        # Hard invariant: need ≥1 of each kind. Adversarial scenarios always
+        # require both diagnosis and fix actions; a scenario with zero of
+        # either is malformed.
+        if len(diag) == 0 or len(fix) == 0:
+            return None
+        if total <= max_total:
+            return list(diag), list(fix)
+
+        # Proportional truncation, keeping at least 1 in each list.
+        diag_ratio = len(diag) / total
+        new_diag = round(max_total * diag_ratio)
+        new_diag = max(1, min(max_total - 1, new_diag))
+        new_fix = max_total - new_diag
+        return list(diag[:new_diag]), list(fix[:new_fix])
 
     @staticmethod
     def _cache_key(weak_spots: List[str]) -> str:

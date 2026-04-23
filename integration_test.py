@@ -882,13 +882,15 @@ bad4 = d_parse._parse(
 )
 report("designer._parse rejects non-list initial_failures", bad4 is None)
 
-# _parse accepts minimal valid
+# _parse accepts minimal valid (must clear the 3-step floor added in Phase 3 cleanup)
 good = d_parse._parse(
     {
         "description": "d",
         "goal": "g",
         "root_cause": "r",
         "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
+        "expected_diagnosis_steps": ["view_logs auth-service", "view_config auth-service"],
+        "expected_fix_actions": ["edit_config auth-service"],
     },
     ["config_error"],
 )
@@ -897,6 +899,75 @@ report("designer._parse accepts minimal valid JSON",
 report("_parse falls back scenario_id when missing",
        good is not None and good.scenario_id.startswith("adv_"),
        f"got={good.scenario_id if good else 'None'}")
+
+# test_designer_parse_rejects_below_step_floor (Phase 3 cleanup)
+below_floor = d_parse._parse(
+    {
+        "description": "d",
+        "goal": "g",
+        "root_cause": "r",
+        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
+        "expected_diagnosis_steps": ["view_logs"],
+        "expected_fix_actions": [],
+    },
+    ["config_error"],
+)
+report("designer._parse rejects below 3-step floor (total=1)", below_floor is None)
+
+# test_designer_parse_truncates_over_budget (Phase 3 cleanup)
+over_budget = d_parse._parse(
+    {
+        "description": "d",
+        "goal": "g",
+        "root_cause": "r",
+        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
+        "expected_diagnosis_steps": [f"view_logs-{i}" for i in range(6)],
+        "expected_fix_actions":       [f"edit_config-{i}" for i in range(4)],
+    },
+    ["config_error"],
+)
+report("test_designer_parse_truncates_over_budget: scenario still returned",
+       over_budget is not None)
+report("test_designer_parse_truncates_over_budget: total trimmed to 8",
+       over_budget is not None and
+       (len(over_budget.expected_diagnosis_steps) + len(over_budget.expected_fix_actions)) == 8,
+       f"got diag={len(over_budget.expected_diagnosis_steps)}, "
+       f"fix={len(over_budget.expected_fix_actions)}")
+# 6/10 -> ratio 0.6 -> round(8*0.6)=5 diag, 3 fix
+report("test_designer_parse_truncates_over_budget: proportional split 5+3",
+       over_budget is not None and len(over_budget.expected_diagnosis_steps) == 5
+       and len(over_budget.expected_fix_actions) == 3)
+# Both lists must keep at least 1 entry even at extreme ratios
+edge = d_parse._parse(
+    {
+        "description": "d", "goal": "g", "root_cause": "r",
+        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
+        "expected_diagnosis_steps": [f"view_{i}" for i in range(12)],
+        "expected_fix_actions": ["edit_config one"],
+    },
+    ["config_error"],
+)
+report("step-budget truncation keeps ≥1 fix action even when ratio is extreme",
+       edge is not None and len(edge.expected_fix_actions) >= 1
+       and (len(edge.expected_diagnosis_steps) + len(edge.expected_fix_actions)) == 8)
+# And ≥1 diagnosis when all mass is on the fix side
+edge2 = d_parse._parse(
+    {
+        "description": "d", "goal": "g", "root_cause": "r",
+        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
+        "expected_diagnosis_steps": [],
+        "expected_fix_actions": [f"fix_{i}" for i in range(12)],
+    },
+    ["config_error"],
+)
+report("step-budget truncation keeps ≥1 diagnosis step even when 0 supplied",
+       edge2 is None,  # total=12 is above floor; but 0 diag means we'd need synth data. Spec says keep ≥1 of each from SOURCE; if source has 0, we can't conjure one.
+       f"got={edge2}")
+# Actually — spec says "Keep at least 1 diagnosis step and 1 fix step". If source list is empty,
+# there's nothing to keep. _enforce_step_budget.new_diag clamps against len(source), so this
+# case returns diag=0, fix=8 — which violates "≥1 each". Accept that None or accept that we
+# return what we have: reject for cleanliness. Current impl trims to min(1, 0)=0 diag which
+# violates the contract. Assertion above asserts reject-on-zero-source-list behaviour is None.
 
 # test_designer_cache_returns_same_scenario — monkey-patch generate_json
 # so we don't need a live LLM. Two calls with same weak_spots must return
@@ -911,6 +982,8 @@ def _fake_json(system, user, temperature=0.7, max_tokens=2048):
         "goal": "fake goal",
         "root_cause": "fake cause",
         "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
+        "expected_diagnosis_steps": ["view_logs", "view_config"],
+        "expected_fix_actions": ["edit_config"],
         "max_steps": 10,
         "difficulty": "hard",
     }
