@@ -1068,6 +1068,162 @@ else:
 
 
 # ============================================================================
+# TEST 15: Round 2 Phase 4 — Hand-off metrics
+# ============================================================================
+print("\n=== TEST 15: Round 2 Phase 4 — Hand-off metrics ===", flush=True)
+
+from devops_pipeline_gym.server.handoff_metrics import (
+    HandoffTracker,
+    HandoffQuality,
+)
+# Role / ServiceStatus / ServiceHealth already imported in the Phase 1 / Phase 2 blocks above.
+
+
+def _mk_svc(name, health=ServiceHealth.HEALTHY):
+    return ServiceStatus(
+        name=name, health=health, current_version="1.0.0",
+        cpu_percent=10.0, memory_percent=20.0,
+        error_rate=0.0, request_latency_ms=50.0,
+        active_connections=10, last_deploy_timestamp="2026-04-24T00:00:00Z",
+    )
+
+
+_svcs = [_mk_svc("api-gateway"), _mk_svc("cache-service", ServiceHealth.DEGRADED), _mk_svc("auth-service")]
+
+# test_handoff_quality_good_note (all 3 signals → ≥0.7; perfect = 1.0)
+t = HandoffTracker()
+q_good = t.score_handoff(
+    Role.SRE, Role.DEV,
+    "cache-service logs show config error — edit redis.host to fix",
+    None, _svcs,
+)
+report("test_handoff_quality_good_note: all three signals present",
+       q_good.has_context and q_good.has_diagnosis and q_good.has_target_action)
+report("test_handoff_quality_good_note: score ≥ 0.7 (is 1.0)",
+       q_good.quality_score >= 0.7, f"score={q_good.quality_score:.2f}")
+
+# test_handoff_quality_empty_note — empty notes FROM SRE score 0.0
+t_empty_sre = HandoffTracker()
+q_empty_sre = t_empty_sre.score_handoff(Role.SRE, Role.DEV, "", None, _svcs)
+report("test_handoff_quality_empty_note: SRE empty note scores 0.0",
+       q_empty_sre.quality_score == 0.0, f"score={q_empty_sre.quality_score}")
+# None is treated as empty
+q_none = t_empty_sre.score_handoff(Role.SRE, Role.DEV, None, None, _svcs)
+report("test_handoff_quality_empty_note: None treated as empty (SRE scores 0.0)",
+       q_none.quality_score == 0.0)
+# Non-SRE empty: auto-diag (0.4) still granted per BATTLEPLAN rubric — document behaviour
+q_empty_dev = t_empty_sre.score_handoff(Role.DEV, Role.OPS, "", None, _svcs)
+report("empty DEV note: non-SRE still auto-granted diagnosis (0.4)",
+       q_empty_dev.quality_score == 0.4 and not q_empty_dev.has_diagnosis)
+
+# test_handoff_quality_sre_requires_diagnosis — SRE without diagnosis keyword loses 0.4
+t2 = HandoffTracker()
+# context (cache-service) + action (deploy) but no diagnosis keyword.
+q_sre_no_diag = t2.score_handoff(
+    Role.SRE, Role.OPS,
+    "cache-service is broken; deploy hotfix now",  # no diagnosis keyword
+    None, _svcs,
+)
+report("test_handoff_quality_sre_requires_diagnosis: no diagnosis → has_diagnosis=False",
+       q_sre_no_diag.has_diagnosis is False)
+report("test_handoff_quality_sre_requires_diagnosis: score = 0.6 (0.3 ctx + 0.3 action)",
+       abs(q_sre_no_diag.quality_score - 0.6) < 1e-9,
+       f"score={q_sre_no_diag.quality_score}")
+
+# Positive control for SRE — diagnosis keyword restores the 0.4
+q_sre_with_diag = t2.score_handoff(
+    Role.SRE, Role.OPS,
+    "cache-service logs show root cause config error; deploy fix",
+    None, _svcs,
+)
+report("SRE with diagnosis keyword restores 0.4 (score = 1.0)",
+       q_sre_with_diag.has_diagnosis and q_sre_with_diag.quality_score == 1.0)
+
+# test_handoff_quality_non_sre_auto_diagnosis — Dev/Ops handoffs get auto 0.4 without keyword
+t3 = HandoffTracker()
+q_dev = t3.score_handoff(
+    Role.DEV, Role.OPS,
+    "cache-service ready; please deploy",  # no diagnosis keyword
+    None, _svcs,
+)
+report("test_handoff_quality_non_sre_auto_diagnosis (DEV): score = 1.0 without diagnosis keyword",
+       q_dev.quality_score == 1.0 and q_dev.has_diagnosis is False,
+       f"score={q_dev.quality_score} has_diag={q_dev.has_diagnosis}")
+
+q_ops = t3.score_handoff(
+    Role.OPS, Role.SRE,
+    "api-gateway is stable; please continue monitoring and restart if needed",
+    None, _svcs,
+)
+report("test_handoff_quality_non_sre_auto_diagnosis (OPS): auto 0.4 diagnosis granted",
+       q_ops.has_diagnosis is False and q_ops.quality_score >= 0.7,
+       f"score={q_ops.quality_score}")
+
+# test_handoff_tracker_average_empty_returns_zero
+t_empty = HandoffTracker()
+report("test_handoff_tracker_average_empty_returns_zero",
+       t_empty.average_quality() == 0.0)
+
+# test_handoff_tracker_average_multiple_handoffs
+t4 = HandoffTracker()
+t4.score_handoff(Role.SRE, Role.DEV, "cache-service config error; edit redis.host", None, _svcs)  # 1.0
+t4.score_handoff(Role.DEV, Role.OPS, "", None, _svcs)                                              # 0.4
+t4.score_handoff(Role.OPS, Role.SRE, "api-gateway healthy; restart auth-service if needed", None, _svcs)  # 1.0
+# Expected avg = (1.0 + 0.4 + 1.0) / 3 = 0.8
+avg = t4.average_quality()
+report("test_handoff_tracker_average_multiple_handoffs: computes correct mean",
+       abs(avg - (1.0 + 0.4 + 1.0) / 3) < 1e-9,
+       f"avg={avg:.4f}")
+
+# Tracker logs every scored hand-off
+report("HandoffTracker.handoffs grows with each scored call",
+       len(t4.handoffs) == 3)
+
+# to_dict serialization round-trip (shape check)
+d = t4.to_dict()
+report("to_dict has num_handoffs, avg_quality, handoffs list",
+       set(d.keys()) == {"num_handoffs", "avg_quality", "handoffs"}
+       and d["num_handoffs"] == 3
+       and isinstance(d["handoffs"], list)
+       and len(d["handoffs"]) == 3)
+report("to_dict handoff entries carry role values + score",
+       all("from" in h and "to" in h and "score" in h for h in d["handoffs"]))
+
+# No-service-list → context cannot be found regardless of notes
+t5 = HandoffTracker()
+q_no_svcs = t5.score_handoff(
+    Role.SRE, Role.DEV,
+    "cache-service is failing due to config error; edit the config",
+    None, None,
+)
+report("empty current_services → has_context False",
+       q_no_svcs.has_context is False)
+# But diagnosis + action still count; SRE with diagnosis keyword scores 0.4 + 0.3 = 0.7
+report("empty current_services: SRE with diagnosis+action still scores 0.7",
+       abs(q_no_svcs.quality_score - 0.7) < 1e-9,
+       f"score={q_no_svcs.quality_score}")
+
+# Service-name match is case-insensitive (notes might be written in different cases)
+t6 = HandoffTracker()
+q_case = t6.score_handoff(
+    Role.DEV, Role.OPS,
+    "API-GATEWAY deploy ready",  # uppercase service name
+    None, _svcs,
+)
+report("service name match is case-insensitive",
+       q_case.has_context is True, f"has_context={q_case.has_context}")
+
+# Round 1 regression — module is import-only, integration happens in Phase 5.
+# Re-verify env still boots with all Round 2 modules loaded.
+os.environ["DEVOPS_TASK"] = "clean_deploy"
+from server.pipeline_environment import PipelineEnvironment as _PEnvAfterHandoff
+_regr = _PEnvAfterHandoff()
+_regr_obs = _regr.reset()
+report("Round 1 regression: env still boots after handoff_metrics added",
+       _regr_obs.services and _regr_obs.step_number == 0)
+
+
+# ============================================================================
 # SUMMARY
 # ============================================================================
 print("\n" + "=" * 70, flush=True)
