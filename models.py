@@ -58,6 +58,34 @@ class MigrationType(str, Enum):
     ROLLBACK_MIGRATION = "rollback_migration"
 
 
+class Role(str, Enum):
+    """Round 2 — agent action mode (situation-aware specialization)."""
+    DEV = "dev"
+    SRE = "sre"
+    OPS = "ops"
+
+
+# Authoritative role→action_type mapping. Defined once so roles.py, rewards.py,
+# and any validator use the same source of truth.
+ROLE_ACTIONS: Dict[Role, List[ActionType]] = {
+    Role.DEV: [
+        ActionType.VIEW_CONFIG,
+        ActionType.EDIT_CONFIG,
+        ActionType.RUN_MIGRATION,
+    ],
+    Role.SRE: [
+        ActionType.VIEW_LOGS,
+        ActionType.VIEW_PIPELINE,
+    ],
+    Role.OPS: [
+        ActionType.DEPLOY,
+        ActionType.ROLLBACK,
+        ActionType.APPROVE,
+        ActionType.ABORT,
+    ],
+}
+
+
 # --- Sub-models (plain BaseModel) --------------------------------------------
 
 class ConfigEdit(BaseModel):
@@ -106,6 +134,13 @@ class AlertInfo(BaseModel):
     timestamp: str
 
 
+class RoleHistoryEntry(BaseModel):
+    """Round 2 — one entry per role-driven action. Stored on observation."""
+    step: int
+    role: Role
+    action_type: ActionType
+
+
 # --- Action (extends OpenEnv Action) ----------------------------------------
 
 class PipelineAction(Action):
@@ -135,6 +170,17 @@ class PipelineAction(Action):
     reason: Optional[str] = Field(
         default=None,
         description="Justification for approve/abort/rollback.",
+    )
+    role: Role = Field(
+        default=Role.SRE,
+        description="Round 2 — which role is taking this action. Default SRE so "
+                    "old-style Round 1 actions still work.",
+    )
+    handoff_notes: Optional[str] = Field(
+        default=None,
+        description="Round 2 — brief context/diagnosis passed to the next role. "
+                    "Scored for quality (service mention, diagnosis keywords, "
+                    "action suggestion).",
     )
 
 
@@ -176,4 +222,16 @@ class PipelineObservation(Observation):
     summary: Optional[str] = Field(
         default=None,
         description="Quick status summary highlighting degraded/down services.",
+    )
+    current_role: Role = Field(
+        default=Role.SRE,
+        description="Round 2 — which role is expected to act next.",
+    )
+    role_history: List[RoleHistoryEntry] = Field(
+        default_factory=list,
+        description="Round 2 — log of which role acted on which step.",
+    )
+    previous_handoff: Optional[str] = Field(
+        default=None,
+        description="Round 2 — hand-off notes from the previous role's action.",
     )

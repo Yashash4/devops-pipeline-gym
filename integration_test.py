@@ -400,6 +400,203 @@ report("edit_config mentions restart/latency", has_restart, config_result[:120])
 
 
 # ============================================================================
+# TEST 12: Round 2 Phase 1 — Role system
+# ============================================================================
+print("\n=== TEST 12: Round 2 Phase 1 — Role system ===", flush=True)
+
+from devops_pipeline_gym.models import (
+    ROLE_ACTIONS,
+    PipelineObservation,
+    PipelineStage,
+    PipelineStatus,
+    Role,
+    ServiceHealth,
+    ServiceStatus,
+)
+from devops_pipeline_gym.server.roles import RoleRouter
+
+
+def _mk_status(stage):
+    return PipelineStatus(
+        stage=stage,
+        triggered_by="test",
+        started_at="2026-04-23T00:00:00Z",
+        commit_sha="deadbeef",
+    )
+
+
+def _mk_obs(services, stage=PipelineStage.IDLE, step_number=0, last_error=None, alerts=None):
+    return PipelineObservation(
+        task_description="t",
+        goal="g",
+        step_number=step_number,
+        services=services,
+        pipeline=_mk_status(stage),
+        active_alerts=alerts or [],
+        last_action_error=last_error,
+    )
+
+
+def _svc(name, health):
+    return ServiceStatus(
+        name=name,
+        health=health,
+        current_version="1.0.0",
+        cpu_percent=10.0,
+        memory_percent=20.0,
+        error_rate=0.0,
+        request_latency_ms=50.0,
+        active_connections=10,
+        last_deploy_timestamp="2026-04-01T00:00:00Z",
+    )
+
+
+# test_role_enum_values
+expected_values = {"dev", "sre", "ops"}
+actual_values = {r.value for r in Role}
+report("test_role_enum_values", actual_values == expected_values,
+       f"expected={sorted(expected_values)} actual={sorted(actual_values)}")
+
+# test_role_actions_mapping
+dev_actions = {a.value for a in ROLE_ACTIONS[Role.DEV]}
+sre_actions = {a.value for a in ROLE_ACTIONS[Role.SRE]}
+ops_actions = {a.value for a in ROLE_ACTIONS[Role.OPS]}
+report("ROLE_ACTIONS[DEV] == view_config/edit_config/run_migration",
+       dev_actions == {"view_config", "edit_config", "run_migration"},
+       f"got={sorted(dev_actions)}")
+report("ROLE_ACTIONS[SRE] == view_logs/view_pipeline",
+       sre_actions == {"view_logs", "view_pipeline"},
+       f"got={sorted(sre_actions)}")
+report("ROLE_ACTIONS[OPS] == deploy/rollback/approve/abort",
+       ops_actions == {"deploy", "rollback", "approve", "abort"},
+       f"got={sorted(ops_actions)}")
+# No overlap between roles — each ActionType belongs to exactly one role.
+all_role_actions = [dev_actions, sre_actions, ops_actions]
+no_overlap = True
+for i in range(len(all_role_actions)):
+    for j in range(i + 1, len(all_role_actions)):
+        if all_role_actions[i] & all_role_actions[j]:
+            no_overlap = False
+report("ROLE_ACTIONS partitions action space (no role overlap)", no_overlap)
+
+# test_role_router_picks_sre_for_incident
+router = RoleRouter()
+obs_incident = _mk_obs(
+    services=[_svc("api-gateway", ServiceHealth.DEGRADED), _svc("cache", ServiceHealth.HEALTHY)],
+    step_number=1,
+)
+report("test_role_router_picks_sre_for_incident",
+       router.next_role(obs_incident) == Role.SRE,
+       f"got={router.next_role(obs_incident).value}")
+
+# test_role_router_progresses_after_investigation (SRE investigated + config issue -> DEV)
+router2 = RoleRouter()
+router2.record_role(Role.SRE)  # investigation happened last step
+obs_config_issue = _mk_obs(
+    services=[_svc("cache", ServiceHealth.DEGRADED)],
+    step_number=2,
+    last_error="config value invalid: redis.host unreachable",
+)
+report("test_role_router_progresses_after_investigation",
+       router2.next_role(obs_config_issue) == Role.DEV,
+       f"got={router2.next_role(obs_config_issue).value}")
+
+# Router picks OPS when pipeline is staging (and no active incident)
+router3 = RoleRouter()
+obs_staging = _mk_obs(
+    services=[_svc("api-gateway", ServiceHealth.HEALTHY)],
+    stage=PipelineStage.STAGING,
+    step_number=2,
+)
+report("router picks OPS when pipeline is STAGING",
+       router3.next_role(obs_staging) == Role.OPS,
+       f"got={router3.next_role(obs_staging).value}")
+
+# Router picks OPS when all healthy and past settle step
+router4 = RoleRouter()
+obs_healthy = _mk_obs(
+    services=[_svc("api-gateway", ServiceHealth.HEALTHY)],
+    step_number=5,
+)
+report("router picks OPS when healthy past settle step",
+       router4.next_role(obs_healthy) == Role.OPS,
+       f"got={router4.next_role(obs_healthy).value}")
+
+# Default at step 0 with no services / no signals -> SRE
+router5 = RoleRouter()
+obs_default = _mk_obs(services=[], step_number=0)
+report("router default is SRE at step 0",
+       router5.next_role(obs_default) == Role.SRE,
+       f"got={router5.next_role(obs_default).value}")
+
+# test_role_validation_rejects_wrong_action
+router6 = RoleRouter()
+report("validate_action: DEV cannot DEPLOY",
+       router6.validate_action(Role.DEV, ActionType.DEPLOY) is False)
+report("validate_action: SRE cannot EDIT_CONFIG",
+       router6.validate_action(Role.SRE, ActionType.EDIT_CONFIG) is False)
+report("validate_action: OPS cannot VIEW_LOGS",
+       router6.validate_action(Role.OPS, ActionType.VIEW_LOGS) is False)
+report("validate_action: DEV CAN EDIT_CONFIG",
+       router6.validate_action(Role.DEV, ActionType.EDIT_CONFIG) is True)
+report("validate_action: SRE CAN VIEW_LOGS",
+       router6.validate_action(Role.SRE, ActionType.VIEW_LOGS) is True)
+report("validate_action: OPS CAN DEPLOY",
+       router6.validate_action(Role.OPS, ActionType.DEPLOY) is True)
+
+# record_role + _has_recent_role
+router7 = RoleRouter()
+router7.record_role(Role.SRE)
+router7.record_role(Role.DEV)
+report("record_role appends in order",
+       router7.history == [Role.SRE, Role.DEV])
+
+# test_round1_regression_no_role_field — old-style Round 1 action with NO role field
+# MUST parse cleanly and default to SRE, and handoff_notes must default to None.
+legacy_raw = {"action_type": "view_pipeline"}
+legacy_action = PipelineAction(**legacy_raw)
+report("test_round1_regression_no_role_field: parses",
+       legacy_action.action_type == ActionType.VIEW_PIPELINE)
+report("test_round1_regression_no_role_field: default role=sre",
+       legacy_action.role == Role.SRE,
+       f"got={legacy_action.role.value}")
+report("test_round1_regression_no_role_field: default handoff_notes=None",
+       legacy_action.handoff_notes is None)
+
+# Old-style full Round 1 action dict (matches what inference.py has historically produced)
+legacy_deploy_raw = {
+    "action_type": "deploy",
+    "service_name": "api-gateway",
+    "target_version": "v2.3.1",
+}
+legacy_deploy = PipelineAction(**legacy_deploy_raw)
+report("Round 1 deploy action still parses without role",
+       legacy_deploy.role == Role.SRE and legacy_deploy.action_type == ActionType.DEPLOY)
+
+# New-style Round 2 action with explicit role passes through
+new_action = PipelineAction(
+    action_type=ActionType.EDIT_CONFIG,
+    service_name="cache-service",
+    config_edits=[ConfigEdit(key="redis.host", value="redis-prod.internal:6379")],
+    role=Role.DEV,
+    handoff_notes="found stale redis host in cache-service config, changing to prod endpoint",
+)
+report("Round 2 action with explicit role=DEV parses",
+       new_action.role == Role.DEV)
+report("Round 2 action carries handoff_notes",
+       new_action.handoff_notes and "redis" in new_action.handoff_notes)
+
+# Observation default fields present and default to SRE / empty / None
+obs_default_round2 = PipelineObservation(task_description="x", goal="y")
+report("obs default current_role=SRE",
+       obs_default_round2.current_role == Role.SRE)
+report("obs default role_history=[]",
+       obs_default_round2.role_history == [])
+report("obs default previous_handoff=None",
+       obs_default_round2.previous_handoff is None)
+
+
+# ============================================================================
 # SUMMARY
 # ============================================================================
 print("\n" + "=" * 70, flush=True)
