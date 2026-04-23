@@ -1224,6 +1224,159 @@ report("Round 1 regression: env still boots after handoff_metrics added",
 
 
 # ============================================================================
+# TEST 16: Round 2 Phase 5 — Environment integration
+# ============================================================================
+print("\n=== TEST 16: Round 2 Phase 5 — Environment integration ===", flush=True)
+
+from server.rewards import COORDINATION_BONUS_EPISODE_CAP
+
+# test_round1_regression_all_6_tasks — each task still boots + accepts Round 1
+# old-style actions without role + returns non-crash observations.
+for _task in ("clean_deploy", "broken_pipeline", "judgment_call",
+              "cascading_failure", "capacity_crisis", "random_incident"):
+    os.environ["DEVOPS_TASK"] = _task
+    _e = PipelineEnvironment()
+    _obs = _e.reset()
+    _obs = _e.step(PipelineAction(action_type=ActionType.VIEW_PIPELINE))
+    report(f"Round 1 regression: {_task} — reset+step works without role field",
+           _obs.reward is not None and _obs.last_action_error is None,
+           f"reward={_obs.reward}")
+
+os.environ["DEVOPS_TASK"] = "clean_deploy"
+
+# test_wrong_role_action_penalty — explicit wrong role returns -0.15, not executed
+env_wr = PipelineEnvironment()
+env_wr.reset(task="clean_deploy")
+# Force env's expected role to SRE regardless of actual router output
+env_wr._current_role = Role.SRE
+initial_health = env_wr._engine.get_system_health()
+wrong = PipelineAction(
+    action_type=ActionType.DEPLOY,
+    service_name="api-gateway",
+    target_version="v2.3.1",
+    role=Role.OPS,  # env expects SRE → mismatch
+)
+obs_wr = env_wr.step(wrong)
+report("test_wrong_role_action_penalty: reward = -0.15",
+       abs(obs_wr.reward - (-0.15)) < 1e-9, f"got={obs_wr.reward}")
+report("test_wrong_role_action_penalty: action NOT executed (engine state unchanged)",
+       env_wr._engine.get_system_health() == initial_health)
+report("test_wrong_role_action_penalty: last_action_error populated",
+       bool(obs_wr.last_action_error) and "mismatch" in obs_wr.last_action_error.lower())
+
+# Role-permitted-but-wrong-type also penalized at -0.10
+env_wa = PipelineEnvironment()
+env_wa.reset(task="clean_deploy")
+env_wa._current_role = Role.SRE
+wrong_action_type = PipelineAction(
+    action_type=ActionType.DEPLOY,
+    service_name="api-gateway",
+    target_version="v2.3.1",
+    role=Role.SRE,  # role matches env expected, but SRE can't DEPLOY
+)
+obs_wa = env_wa.step(wrong_action_type)
+report("invalid action-for-role: reward = -0.10",
+       abs(obs_wa.reward - (-0.10)) < 1e-9, f"got={obs_wa.reward}")
+
+# test_coordination_bonus_capped_per_episode — manually inject 10 perfect
+# handoffs; verify cumulative bonus caps at COORDINATION_BONUS_EPISODE_CAP.
+env_cap = PipelineEnvironment()
+env_cap.reset(task="broken_pipeline")
+coord_before = env_cap._coordination_bonus_accumulated
+# Drive 10 role-transitioning handoffs in a row with perfect notes.
+# To force a role transition every step we manually alternate _current_role.
+for i in range(10):
+    env_cap._current_role = Role.SRE if i % 2 == 0 else Role.DEV
+    a = PipelineAction(
+        action_type=ActionType.VIEW_LOGS if i % 2 == 0 else ActionType.EDIT_CONFIG,
+        service_name="cache-service",
+        config_edits=[ConfigEdit(key="redis.host", value="redis-prod.internal:6379")] if i % 2 == 1 else None,
+        role=Role.SRE if i % 2 == 0 else Role.DEV,
+        handoff_notes="cache-service logs show root cause config error; edit redis.host to fix" if i % 2 == 0 else "cache-service config edited; please deploy hotfix",
+    )
+    env_cap.step(a)
+    if env_cap._state.step_count >= env_cap._max_steps:
+        break
+report("test_coordination_bonus_capped_per_episode: cumulative ≤ cap",
+       env_cap._coordination_bonus_accumulated <= COORDINATION_BONUS_EPISODE_CAP + 1e-9,
+       f"accumulated={env_cap._coordination_bonus_accumulated:.4f} cap={COORDINATION_BONUS_EPISODE_CAP}")
+report("test_coordination_bonus_capped_per_episode: cap is approached (>0)",
+       env_cap._coordination_bonus_accumulated > 0.0,
+       f"accumulated={env_cap._coordination_bonus_accumulated:.4f}")
+
+# test_curriculum_records_episode_on_done
+env_c = PipelineEnvironment()
+env_c.reset(task="clean_deploy")
+# Abort to end the episode immediately.
+obs_done = env_c.step(PipelineAction(action_type=ActionType.ABORT, reason="test"))
+report("test_curriculum_records_episode_on_done: done flag set",
+       obs_done.done is True)
+report("test_curriculum_records_episode_on_done: curriculum tracker has 1 entry",
+       env_c._curriculum.tracker.per_task.get("clean_deploy") == (0, 1)
+       or env_c._curriculum.tracker.per_task.get("clean_deploy") == (1, 1),
+       f"per_task={dict(env_c._curriculum.tracker.per_task)}")
+
+# test_full_episode_with_all_3_roles — use all 3 roles in one episode and
+# verify the specialization bonus fires on done=True.
+env_all = PipelineEnvironment()
+env_all.reset(task="broken_pipeline")
+# Nudge env's current_role to each of the 3 in turn, send matching action.
+triples = [
+    (Role.SRE, ActionType.VIEW_PIPELINE, None, "SRE investigating pipeline state"),
+    (Role.DEV, ActionType.EDIT_CONFIG, [ConfigEdit(key="redis.host", value="redis-prod.internal:6379")],
+        "cache-service config edited, ready for deploy"),
+    (Role.OPS, ActionType.APPROVE, None, "approving final state"),
+]
+final_obs = None
+for role_, atype, cfg, notes in triples:
+    env_all._current_role = role_
+    a = PipelineAction(
+        action_type=atype,
+        service_name="cache-service" if atype == ActionType.EDIT_CONFIG else None,
+        config_edits=cfg,
+        role=role_,
+        handoff_notes=notes,
+        reason="done" if atype == ActionType.APPROVE else None,
+    )
+    final_obs = env_all.step(a)
+    if final_obs.done:
+        break
+roles_used = {r.value for r in env_all._episode_roles}
+report("test_full_episode_with_all_3_roles: all 3 unique roles in episode_roles",
+       roles_used == {"sre", "dev", "ops"},
+       f"got={sorted(roles_used)}")
+report("test_full_episode_with_all_3_roles: episode ended (APPROVE)",
+       final_obs is not None and final_obs.done is True)
+# role_history length matches episode length
+report("test_full_episode_with_all_3_roles: role_history populated on obs",
+       len(final_obs.role_history) == len(env_all._episode_roles))
+
+# Reward bounds are respected step-to-step.
+from server.rewards import STEP_REWARD_MIN, STEP_REWARD_MAX
+env_b = PipelineEnvironment()
+env_b.reset(task="clean_deploy")
+bounds_ok = True
+for _ in range(5):
+    r = env_b.step(PipelineAction(action_type=ActionType.VIEW_PIPELINE)).reward
+    if r < STEP_REWARD_MIN - 1e-9 or r > STEP_REWARD_MAX + 1e-9:
+        bounds_ok = False
+report("step rewards respect [STEP_REWARD_MIN, STEP_REWARD_MAX]", bounds_ok)
+
+# Round 1 scores still reproduce — run the optimal clean_deploy path again
+# after Phase 5 integration and verify the score matches Phase 0 baseline.
+os.environ["DEVOPS_TASK"] = "clean_deploy"
+from server.graders import grade_task as _grade_after_phase5
+_env_cd = PipelineEnvironment()
+_env_cd.reset()
+# The existing optimal-path test is already driven earlier in TEST 5 and
+# records scores into the `scores` dict — by this point `scores[clean_deploy]`
+# has been computed with Phase 5 env. Just assert the value matches Phase 0.
+report("Round 1 optimal score reproducible after Phase 5 (clean_deploy)",
+       abs(scores.get("clean_deploy", -1) - 0.906) < 0.01,
+       f"scored={scores.get('clean_deploy')}")
+
+
+# ============================================================================
 # SUMMARY
 # ============================================================================
 print("\n" + "=" * 70, flush=True)
