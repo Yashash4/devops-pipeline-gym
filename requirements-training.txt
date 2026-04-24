@@ -7,15 +7,19 @@
 # OR:
 #   pip install -e '.[training]'               # same set via pyproject extras
 #
-# Unsloth pulls torch+bitsandbytes as transitive deps but we pin explicitly
-# so pip resolution is deterministic when the pre-compiled wheels race.
+# Versions validated on Kaggle T4 dry-run 2026-04-24:
+#   unsloth 2026.4.8, trl 0.29.x, torch 2.10.0+cu128, transformers 4.56.2.
+# Older unsloth 2025.9.x is known-bad on the current Kaggle image — pin
+# the floor to 2026.4 to avoid accidentally pulling that branch.
+#
+# torch + transformers are NOT pinned here — Kaggle / HF compute provides
+# them pre-installed at known-good versions that align with their CUDA
+# driver. A local pin would fight those wheels.
 
-torch>=2.3
-unsloth
+unsloth>=2026.4.0
 trl>=0.29.0
 peft>=0.10
 bitsandbytes>=0.43
-transformers>=4.45
 datasets>=2.20
 matplotlib>=3.8
 accelerate>=0.30

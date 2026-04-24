@@ -27,13 +27,16 @@ dev = ["pytest"]
 # require CUDA via bitsandbytes / unsloth). Install separately on Kaggle
 # T4 / H100 for training + eval runs:
 #   pip install -e '.[training]'
+#
+# Validated on Kaggle T4 dry-run 2026-04-24: unsloth 2026.4.8, trl 0.29.x,
+# torch 2.10.0+cu128, transformers 4.56.2. torch + transformers are NOT
+# listed here — the GPU image supplies them at known-good versions that
+# match its CUDA driver. Pinning would fight those wheels.
 training = [
-    "torch>=2.3",
-    "unsloth",
+    "unsloth>=2026.4.0",
     "trl>=0.29.0",
     "peft>=0.10",
     "bitsandbytes>=0.43",
-    "transformers>=4.45",
     "datasets>=2.20",
     "matplotlib>=3.8",
     "accelerate>=0.30",
