@@ -131,6 +131,15 @@ def parse_completion(text: str) -> Dict[str, Any]:
         data = json.loads(text[first : last + 1])
         if not isinstance(data, dict) or "action_type" not in data:
             return fallback
+        # Normalise enum-valued fields to lowercase. Kaggle dry-run showed the
+        # base model likes to emit "role": "SRE" / "DEV" / "OPS" (uppercase),
+        # which Pydantic rejects — the Role enum values are lowercase ("sre",
+        # "dev", "ops"). Do the same for action_type since models also tend
+        # toward "DEPLOY" / "VIEW_LOGS". Any non-string value is left as-is
+        # so Pydantic's own validation surfaces the real error.
+        for key in ("role", "action_type"):
+            if isinstance(data.get(key), str):
+                data[key] = data[key].lower()
         return data
     except Exception:
         return fallback
