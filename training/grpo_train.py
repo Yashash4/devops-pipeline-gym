@@ -24,6 +24,28 @@ Saturday H100 real training:
         --num-generations 8 \\
         --use-vllm \\
         --output-dir ./outputs/run1
+
+Phase 6.5 SFT-adapter-fix test procedure (run on Kaggle T4):
+    # 1. Restart kernel, cd /kaggle/working/gym, git pull
+    # 2. SFT warmup:
+    python training/sft_warmup.py \\
+        --model unsloth/Qwen3-0.6B-bnb-4bit \\
+        --trajectories data/sft_trajectories.jsonl \\
+        --output-dir outputs/sft_warmup \\
+        --epochs 2
+    # 3. GRPO with SFT adapter (must NOT crash with CUDA assert / NaN):
+    python training/grpo_train.py \\
+        --model unsloth/Qwen3-0.6B-bnb-4bit \\
+        --sft-adapter-path outputs/sft_warmup/final \\
+        --env-url http://127.0.0.1:8000 \\
+        --max-steps 3 --num-generations 4 --max-episode-steps 8 \\
+        --use-judge --judge-model llama-3.3-70b-versatile \\
+        --output-dir outputs/grpo_sft_test
+    # 4. Verify: no CUDA assert errors, reward > 0 on step 1,
+    #    frac_reward_zero_std < 0.5, adapter log lines show two adapters:
+    #    "sft_warmup" (frozen) + "default"/"grpo_training" (trainable).
+    # If this still NaN-fails: drop --sft-adapter-path to restore pre-fix
+    # behaviour while we investigate further upstream.
 """
 
 from __future__ import annotations
@@ -485,30 +507,104 @@ def main():
         load_in_4bit=True,
     )
 
-    # Phase 6.5 — optional SFT warmup adapter merge. Must happen BEFORE the
-    # new GRPO LoRA is attached, so the base is "initialised" with JSON
-    # schema knowledge and GRPO's LoRA learns on top of that.
+    # Phase 6.5 hotfix — load the SFT adapter as a FROZEN named prior and
+    # let GRPO stack a new trainable adapter on top. Do NOT merge.
+    #
+    # Why not merge: `merge_and_unload()` on a LoRA attached to a 4-bit
+    # bitsandbytes base runs a dequantize -> add -> requantize cycle.
+    # Rounding error from re-quantisation corrupts enough weights to produce
+    # NaN in the logits during torch.multinomial sampling the first time the
+    # model generates (Kaggle Qwen3-0.6B run 2026-04-24). Confirmed upstream:
+    # PEFT issue #2321 — "Merge LoRA module to 4-bit linear may get different
+    # generations due to rounding errors" (the warning emitted right before
+    # the CUDA assert).
+    #
+    # Stacking via named adapters sidesteps the quantisation round-trip:
+    #   - "sft_warmup"   — frozen, applied during forward pass (the prior)
+    #   - "default"      — trainable, GRPO gradients flow here (the new LoRA)
     if args.sft_adapter_path:
         from peft import PeftModel
-        logger.info("Loading SFT adapter from %s", args.sft_adapter_path)
+        logger.info(
+            "Loading SFT adapter as frozen prior: %s", args.sft_adapter_path
+        )
         model = PeftModel.from_pretrained(
             model,
             args.sft_adapter_path,
-            is_trainable=False,  # merge into base; new LoRA comes later
+            adapter_name="sft_warmup",
+            is_trainable=False,
         )
-        model = model.merge_and_unload()
-        logger.info("SFT adapter merged into base model")
+        # Defense in depth — explicitly freeze SFT params regardless of what
+        # downstream adapter stacking does.
+        for name, param in model.named_parameters():
+            if "sft_warmup" in name:
+                param.requires_grad = False
+        logger.info(
+            "SFT adapter loaded as 'sft_warmup' (frozen prior). "
+            "GRPO LoRA will stack on top."
+        )
 
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=16,
-        lora_alpha=16,
-        lora_dropout=0.0,
-        bias="none",
-        use_gradient_checkpointing="unsloth",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
-    )
+    try:
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=16,
+            lora_alpha=16,
+            lora_dropout=0.0,
+            bias="none",
+            use_gradient_checkpointing="unsloth",
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                            "gate_proj", "up_proj", "down_proj"],
+        )
+        logger.info(
+            "GRPO LoRA added via Unsloth. Active adapter: %s",
+            getattr(model, "active_adapter", "default"),
+        )
+    except Exception as e:
+        # Unsloth's get_peft_model isn't always happy being handed a model
+        # that's already wrapped in PeftModel. Fall back to stock PEFT so
+        # we at least get the adapter we need on top of the SFT prior.
+        logger.warning(
+            "Unsloth get_peft_model failed on pre-wrapped PeftModel (%s: %s); "
+            "falling back to standard peft.LoraConfig + add_adapter",
+            type(e).__name__, e,
+        )
+        from peft import LoraConfig
+        grpo_lora_config = LoraConfig(
+            r=16,
+            lora_alpha=16,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                            "gate_proj", "up_proj", "down_proj"],
+            lora_dropout=0.0,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        model.add_adapter("grpo_training", grpo_lora_config)
+        model.set_adapter("grpo_training")
+        logger.info(
+            "GRPO adapter added via PEFT fallback; active adapter: grpo_training"
+        )
+
+    # Adapter state sanity check — blows up loudly if we ended up with a
+    # model that can't train (no trainable params) or has suspiciously many
+    # (LoRA should be well under 5% of total parameters).
+    if hasattr(model, "peft_config") and model.peft_config:
+        adapter_names = list(model.peft_config.keys())
+        logger.info("Active adapter(s): %s", adapter_names)
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in model.parameters())
+        pct = 100.0 * trainable_params / max(1, total_params)
+        logger.info(
+            "Trainable params: %s / %s (%.2f%%)",
+            f"{trainable_params:,}", f"{total_params:,}", pct,
+        )
+        if trainable_params == 0:
+            raise RuntimeError(
+                "No trainable parameters! GRPO cannot train. Check adapter setup."
+            )
+        if pct > 5.0:
+            logger.warning(
+                "Trainable params suspiciously high (%.1f%%). LoRA should be <5%%.",
+                pct,
+            )
 
     # Phase 6.5 — optional Groq LLM judge (episode-end only).
     judge_client = None
