@@ -188,6 +188,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Enable vLLM generation backend (H100 recommended)")
     p.add_argument("--prompts-per-task", type=int, default=10,
                    help="Number of initial-observation prompts sampled per task")
+    # --- Phase 6.5 flags ---
+    p.add_argument("--sft-adapter-path", default=None,
+                   help="Path to an SFT adapter produced by training/sft_warmup.py; "
+                        "merged into the base before the new GRPO LoRA goes on top")
+    p.add_argument("--max-episode-steps", type=int, default=12,
+                   help="Max steps per episode in the multi-step reward rollout")
+    p.add_argument("--continuation-temperature", type=float, default=0.7,
+                   help="Sampling temperature for continuation actions (steps 2..N)")
+    p.add_argument("--use-judge", action="store_true",
+                   help="Enable Groq LLM judge at episode end (adds judge_weight * score)")
+    p.add_argument("--judge-model", default="llama-3.3-70b-versatile",
+                   help="Groq model id for the judge")
+    p.add_argument("--judge-weight", type=float, default=1.0,
+                   help="Multiplier applied to judge score when --use-judge is on")
     return p
 
 
@@ -240,40 +254,193 @@ def _extract_sentinel(prompt: str) -> Dict[str, Any]:
     return {"task": m.group(1), "seed": int(m.group(2))}
 
 
-def make_reward_function(env_url: str):
-    """Return a GRPO-compatible reward_function bound to a server URL.
+def _generate_continuation_action(
+    model,
+    tokenizer,
+    system_prompt: str,
+    user_prompt: str,
+    max_new_tokens: int = 256,
+    temperature: float = 0.7,
+) -> str:
+    """Generate ONE action string from current model state given observation.
 
-    Signature matches trl.GRPOTrainer's reward_funcs contract:
-        reward_function(completions, prompts, **kwargs) -> List[float]
+    Used inside reward_function for multi-step episode rollouts (Phase 6.5
+    Option B: the first action in the episode is the GRPO training
+    completion; subsequent actions come from this helper using the same
+    model via closure).
+
+    Returns the raw completion string (parse_completion will turn it into
+    a PipelineAction dict).
+    """
+    import torch  # late import so module stays importable on CPU hosts
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    prompt_ids = tokenizer.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors="pt",
+    ).to(model.device)
+
+    with torch.no_grad():
+        output = model.generate(
+            prompt_ids,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=temperature,
+            top_p=0.9,
+            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+        )
+
+    completion_ids = output[0][prompt_ids.shape[1]:]
+    return tokenizer.decode(completion_ids, skip_special_tokens=True)
+
+
+def make_reward_function(
+    env_url: str,
+    model_ref=None,
+    tokenizer_ref=None,
+    system_prompt: str = "",
+    judge_client=None,
+    judge_weight: float = 1.0,
+    max_episode_steps: int = 12,
+    continuation_temperature: float = 0.7,
+    continuation_max_tokens: int = 256,
+):
+    """Multi-step episode reward via closure over model + tokenizer.
+
+    Phase 6.5 Option B: the GRPO training completion is executed as the
+    FIRST action (gradients target this). Remaining steps (up to
+    max_episode_steps - 1) continue using the SAME model via
+    `_generate_continuation_action`, running until env.done or the cap.
+    Reward returned is the episode sum — ranges roughly [-3, +5] once
+    the terminal bonus/penalty in pipeline_environment.step() fires.
+
+    Backward compatibility: when model_ref/tokenizer_ref are None, falls
+    back to single-step bandit behaviour (the original Phase 6 semantics).
+    This is only used by CPU-host sanity checks; real training paths
+    always pass model and tokenizer.
+
+    Optional Groq LLM judge: if `judge_client` is provided and
+    `judge_weight > 0`, the episode reward gets `judge_weight * score`
+    added at episode end (score clipped to [-1, +1] by the client). Any
+    judge failure falls through returning 0.0 so training continues.
     """
     from devops_pipeline_gym.models import PipelineAction
 
+    multi_step = model_ref is not None and tokenizer_ref is not None
+
     def reward_function(completions: List[str], prompts: List[str], **_kwargs) -> List[float]:
         rewards: List[float] = []
-        for prompt_text, completion in zip(prompts, completions):
+        for prompt_text, first_completion in zip(prompts, completions):
             meta = _extract_sentinel(prompt_text)
             task = meta["task"]
             seed = meta["seed"]
-            action_data = parse_completion(completion)
-            try:
-                action = PipelineAction(**action_data)
-            except Exception as e:
-                logger.warning("parse_completion produced invalid action: %s; err=%s",
-                               action_data, e)
-                rewards.append(-0.10)
-                continue
             try:
                 os.environ["DEVOPS_TASK"] = task
                 if task == "random_incident":
                     os.environ["DEVOPS_SEED"] = str(6000 + seed)
+
+                # Parse the GRPO-generated first action.
+                try:
+                    action_data = parse_completion(first_completion)
+                    action1 = PipelineAction(**action_data)
+                except Exception as e:
+                    logger.warning("step 1 parse failed: %s", str(e)[:80])
+                    rewards.append(-1.0)
+                    continue
+
                 with _make_sync_client(env_url) as client:
-                    client.reset()
-                    result = client.step(action)
-                    r = float(result.reward or 0.0)
-                    rewards.append(r)
+                    reset_result = client.reset()
+                    task_description = ""
+                    if getattr(reset_result, "observation", None) is not None:
+                        obs0 = reset_result.observation
+                        if hasattr(obs0, "task_description"):
+                            task_description = obs0.task_description or ""
+                        elif isinstance(obs0, dict):
+                            task_description = obs0.get("task_description", "") or ""
+
+                    # STEP 1 — the training completion (GRPO gradient target).
+                    try:
+                        result = client.step(action1)
+                    except Exception as e:
+                        logger.warning("step 1 env error: %s", str(e)[:80])
+                        rewards.append(-1.0)
+                        continue
+                    episode_reward = float(getattr(result, "reward", 0.0) or 0.0)
+                    done = bool(getattr(result, "done", False))
+                    current_obs = getattr(result, "observation", None)
+                    action_history: List[Dict[str, Any]] = [
+                        {"action": action_data, "reward": episode_reward}
+                    ]
+
+                    # STEPS 2..N — continue with the same model (only when
+                    # multi_step; otherwise degrade to single-step bandit).
+                    obs_dict: Dict[str, Any] = {}
+                    step = 1
+                    while multi_step and not done and step < max_episode_steps:
+                        if current_obs is None:
+                            break
+                        if hasattr(current_obs, "model_dump"):
+                            obs_dict = current_obs.model_dump()
+                        elif isinstance(current_obs, dict):
+                            obs_dict = current_obs
+                        else:
+                            break
+
+                        # Role for the next action's prompt
+                        role = "sre"
+                        cr = obs_dict.get("current_role")
+                        if cr is None:
+                            cr = getattr(current_obs, "current_role", None)
+                        if cr:
+                            role = cr.value if hasattr(cr, "value") else str(cr).lower()
+
+                        user = build_prompt(obs_dict, role)
+                        try:
+                            cont = _generate_continuation_action(
+                                model_ref, tokenizer_ref,
+                                system_prompt, user,
+                                max_new_tokens=continuation_max_tokens,
+                                temperature=continuation_temperature,
+                            )
+                            action_data_n = parse_completion(cont)
+                            action_n = PipelineAction(**action_data_n)
+                            step_result = client.step(action_n)
+                            step_reward = float(getattr(step_result, "reward", 0.0) or 0.0)
+                            episode_reward += step_reward
+                            done = bool(getattr(step_result, "done", False))
+                            current_obs = getattr(step_result, "observation", None)
+                            action_history.append(
+                                {"action": action_data_n, "reward": step_reward}
+                            )
+                        except Exception as e:
+                            logger.warning("step %d failed: %s", step + 1, str(e)[:80])
+                            episode_reward -= 0.1  # small penalty; keep the loop going
+                        step += 1
+
+                    # Optional LLM judge at episode end.
+                    if judge_client is not None and judge_weight > 0:
+                        try:
+                            final_obs_dict = obs_dict if obs_dict else {}
+                            judge_score = judge_client.score_episode(
+                                task_name=task_description[:120] or task,
+                                action_history=action_history,
+                                final_observation=final_obs_dict,
+                                episode_reward=episode_reward,
+                                done=done,
+                            )
+                            episode_reward += judge_weight * float(judge_score or 0.0)
+                        except Exception as e:
+                            logger.warning("judge call failed (non-fatal): %s", str(e)[:100])
+
+                rewards.append(episode_reward)
             except Exception as e:
-                logger.error("env rollout failed (%s): %s", type(e).__name__, e)
-                rewards.append(-0.10)
+                logger.error("episode rollout failed: %s: %s", type(e).__name__, str(e)[:150])
+                rewards.append(-1.0)
         return rewards
 
     return reward_function
@@ -302,6 +469,14 @@ def main():
         )
         raise SystemExit(2)
 
+    # Phase 6.5 informational — does TRL expose its experimental OpenEnv
+    # helper? Option A path. We stay on Option B (closure) regardless.
+    try:
+        from trl.experimental.openenv import generate_rollout_completions  # noqa: F401
+        logger.info("TRL experimental.openenv AVAILABLE (Option A viable, not used this run)")
+    except ImportError:
+        logger.info("TRL experimental.openenv NOT available; using Option B (closure-based multi-step)")
+
     logger.info("Loading base model: %s", args.model)
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model,
@@ -309,6 +484,21 @@ def main():
         dtype=None,
         load_in_4bit=True,
     )
+
+    # Phase 6.5 — optional SFT warmup adapter merge. Must happen BEFORE the
+    # new GRPO LoRA is attached, so the base is "initialised" with JSON
+    # schema knowledge and GRPO's LoRA learns on top of that.
+    if args.sft_adapter_path:
+        from peft import PeftModel
+        logger.info("Loading SFT adapter from %s", args.sft_adapter_path)
+        model = PeftModel.from_pretrained(
+            model,
+            args.sft_adapter_path,
+            is_trainable=False,  # merge into base; new LoRA comes later
+        )
+        model = model.merge_and_unload()
+        logger.info("SFT adapter merged into base model")
+
     model = FastLanguageModel.get_peft_model(
         model,
         r=16,
@@ -320,12 +510,41 @@ def main():
                         "gate_proj", "up_proj", "down_proj"],
     )
 
+    # Phase 6.5 — optional Groq LLM judge (episode-end only).
+    judge_client = None
+    if args.use_judge:
+        from server.judge_client import GroqJudgeClient
+        judge_client = GroqJudgeClient(
+            groq_api_key=os.environ.get("GROQ_API_KEY"),
+            ollama_api_key=os.environ.get("OLLAMA_API_KEY"),
+            ollama_host=os.environ.get("OLLAMA_HOST"),
+            model=args.judge_model,
+        )
+        if judge_client.groq_key:
+            logger.info("Groq judge enabled (model=%s, weight=%.2f)",
+                        args.judge_model, args.judge_weight)
+        else:
+            logger.warning(
+                "GROQ_API_KEY missing; judge will try Ollama fallback and "
+                "otherwise return 0.0 (no judge bonus)."
+            )
+
     logger.info("Building dataset from env rollouts (prompts_per_task=%d)", args.prompts_per_task)
     prompts = build_dataset(args.env_url, prompts_per_task=args.prompts_per_task)
     logger.info("Dataset size: %d prompts", len(prompts))
     dataset = Dataset.from_list(prompts)
 
-    reward_fn = make_reward_function(args.env_url)
+    reward_fn = make_reward_function(
+        env_url=args.env_url,
+        model_ref=model,
+        tokenizer_ref=tokenizer,
+        system_prompt=SYSTEM_PROMPT,
+        judge_client=judge_client,
+        judge_weight=args.judge_weight if args.use_judge else 0.0,
+        max_episode_steps=args.max_episode_steps,
+        continuation_temperature=args.continuation_temperature,
+        continuation_max_tokens=args.max_completion_length,
+    )
 
     cfg_kwargs = dict(
         output_dir=str(out_dir),
