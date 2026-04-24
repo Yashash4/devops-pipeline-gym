@@ -34,12 +34,16 @@ dev = ["pytest"]
 # match its CUDA driver. Pinning would fight those wheels.
 training = [
     "unsloth>=2026.4.0",
-    "trl>=0.29.0",
+    # TRL 0.28+ accepted; Kaggle images ship 0.24-0.29. grpo_train.py probes
+    # trl.experimental.openenv and falls back to closure-based multi-step.
+    "trl>=0.28.0",
     "peft>=0.10",
     "bitsandbytes>=0.43",
     "datasets>=2.20",
     "matplotlib>=3.8",
     "accelerate>=0.30",
+    # judge_client.py uses httpx for Groq / Ollama calls when --use-judge is set.
+    "httpx>=0.25",
 ]
 
 [project.scripts]
