@@ -326,8 +326,29 @@ class PipelineEnvironment(Environment):
                 self._episode_roles + [action.role]
             )
 
-        # Final bounded reward for this step.
+        # Final bounded reward for this step (Round 1 + Round 2 deltas).
         reward = bound_step_reward(round1_reward + round2_delta)
+
+        # Phase 6.5 — episode-terminal bonus/penalty. Widens the episode
+        # reward range so GRPO sees meaningful variance across completions.
+        # Applied ON TOP of the per-step bound (terminal effect only fires
+        # once per episode; doesn't stack across steps).
+        if done:
+            all_healthy = all(
+                svc.get("health") == "healthy"
+                for svc in current_state["services"].values()
+            )
+            terminal_bonus = 0.0
+            if action.action_type == ActionType.APPROVE:
+                terminal_bonus = 2.0 if all_healthy else -0.5
+            elif action.action_type == ActionType.ABORT:
+                terminal_bonus = -1.5
+            elif self._state.step_count >= self._max_steps and not all_healthy:
+                terminal_bonus = -1.5
+            # else: catastrophic-health termination (system_health < 20) —
+            # already heavily penalised via the health-delta channel, no
+            # double-penalty here.
+            reward += terminal_bonus
 
         # ── Round 1 history entry (uses final combined reward) ────────────
         broke_healthy = False

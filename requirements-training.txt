@@ -17,9 +17,17 @@
 # driver. A local pin would fight those wheels.
 
 unsloth>=2026.4.0
-trl>=0.29.0
+# TRL floor bumped DOWN to 0.28: Kaggle 2026.4 image ships 0.24.0. We accept
+# anything >=0.28 if pip can resolve it; grpo_train.py probes
+# trl.experimental.openenv (Option A path) and falls back to closure (Option B)
+# when not available.
+trl>=0.28.0
 peft>=0.10
 bitsandbytes>=0.43
 datasets>=2.20
 matplotlib>=3.8
 accelerate>=0.30
+# httpx needed by server/judge_client.py if training runs with --use-judge.
+# Also listed in base requirements.txt already; repeated here for clarity
+# when someone installs only the training extras.
+httpx>=0.25
