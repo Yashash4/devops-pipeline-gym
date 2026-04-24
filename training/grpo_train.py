@@ -96,7 +96,28 @@ def build_prompt(obs: Dict[str, Any], role: str) -> str:
 
         AVAILABLE ACTIONS: {', '.join(available) if available else '(none)'}
 
-        Respond with ONE JSON action.
+        OUTPUT SCHEMA (strict — must match Pydantic PipelineAction):
+          role values:         sre | dev | ops          (lowercase)
+          action_type values:  view_pipeline | view_logs | view_config | edit_config |
+                               run_migration | deploy | rollback | approve | abort
+          service_name:        api-gateway | auth-service | cache-service |
+                               database-primary | web-frontend
+          config_edits:        LIST of objects, each with exactly two keys "key" and "value",
+                               both strings. Key uses dot-notation
+                               (e.g. "database.pool_size", "redis.host"). NOT a dict
+                               of named sections like {{"environment": ..., "packages": ...}}.
+
+        EXAMPLES (valid JSON bodies):
+          {{"action_type": "view_pipeline", "role": "sre"}}
+          {{"action_type": "view_logs", "service_name": "cache-service", "role": "sre"}}
+          {{"action_type": "edit_config", "service_name": "cache-service",
+            "config_edits": [{{"key": "redis.host", "value": "redis-prod.internal:6379"}}],
+            "role": "dev",
+            "handoff_notes": "cache redis.host was pointing to staging; switched to prod"}}
+          {{"action_type": "deploy", "service_name": "api-gateway",
+            "target_version": "v2.3.1", "role": "ops"}}
+
+        Respond with ONE JSON action matching the schema above. No prose, no code fences.
         """
     ).strip()
     return user
