@@ -1,18 +1,17 @@
 """Run a model (HF hub id or local adapter) across all 6 tasks × N seeds.
 
-Output JSON is the input to generate_comparison_chart.py. Works in two
-modes:
-  * Base model (e.g. ``unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit``) — loads with
-    transformers and samples greedily.
-  * Local adapter directory (e.g. ``./outputs/run1/final``) — loads the base
-    model indicated inside adapter_config.json then merges the LoRA adapter.
+Output JSON feeds generate_comparison_chart.py. Three execution modes:
+  * ``--use-hf-router`` — send prompts to https://router.huggingface.co/v1
+    via the openai-compatible client. No GPU required. Same HF_TOKEN as
+    inference.py. Good for capturing baselines on a CPU-only host.
+  * HF hub id (e.g. ``unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit``) — loads
+    locally with transformers. Requires GPU for 4-bit; CPU works slowly.
+  * Local adapter directory (e.g. ``./outputs/run1/final``) — loads the
+    base model referenced in ``adapter_config.json`` then wraps with
+    the LoRA adapter via PEFT.
 
-This script is intentionally self-contained and uses HTTP against the env
-server (no direct imports of scenarios / engine) so the same eval can be
-pointed at the HF Space instead of a local env.
-
-CPU works too (slow) — useful for a dry-run sanity check. For Saturday real
-eval on GPU: pass a 4-bit base + PEFT adapter.
+This script never imports scenarios / engine directly, so the same eval
+can be pointed at the HF Space by setting --env-url to the Space URL.
 """
 
 from __future__ import annotations
@@ -22,8 +21,16 @@ import json
 import logging
 import os
 import statistics
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Allow running directly (python training/eval_baseline.py) OR as a module
+# (python -m training.eval_baseline). When launched as a script, the
+# parent dir isn't on sys.path → add it so `from training....` works.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from devops_pipeline_gym.client import DevopsPipelineEnv
 from devops_pipeline_gym.models import ActionType, PipelineAction, Role
@@ -102,6 +109,66 @@ class _ModelAdapter:
         return ""
 
 
+class _HFRouterAdapter:
+    """HF Inference Router (OpenAI-compatible). No GPU required.
+
+    Mirrors inference.py's pattern so baseline + trained eval share the
+    same client wiring. Reads HF_TOKEN from env, defaults API_BASE_URL
+    to HuggingFace's router.
+    """
+
+    def __init__(self, model_spec: str,
+                 api_base_url: Optional[str] = None,
+                 temperature: float = 0.0,
+                 max_tokens: int = 300):
+        self.model_spec = model_spec
+        self.api_base_url = api_base_url or os.environ.get("API_BASE_URL") or "https://router.huggingface.co/v1"
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self._client = None
+
+    def load(self):
+        from openai import OpenAI  # late import
+        api_key = os.environ.get("HF_TOKEN") or os.environ.get("API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "--use-hf-router requires HF_TOKEN (or API_KEY) in env / .env"
+            )
+        self._client = OpenAI(base_url=self.api_base_url, api_key=api_key)
+        return self
+
+    def complete(self, system: str, user: str) -> str:
+        if self._client is None:
+            raise RuntimeError("Call .load() first")
+        try:
+            resp = self._client.chat.completions.create(
+                model=self.model_spec,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                stream=False,
+            )
+            return (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            logger.error("HF router call failed (%s): %s", type(e).__name__, e)
+            return ""
+
+
+def _load_env_file(path: Path) -> None:
+    """Tiny .env loader — no python-dotenv dep."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip())
+
+
 # ─── Per-episode evaluation ──────────────────────────────────────────────────
 
 def run_episode(client, model_adapter, task: str, seed_offset: int) -> Dict[str, Any]:
@@ -145,14 +212,21 @@ def run_episode(client, model_adapter, task: str, seed_offset: int) -> Dict[str,
             done = True
             break
 
-    # Success heuristic — matches pipeline_environment.reset/record_episode.
-    # We call /grader for the canonical score.
-    try:
-        # The EnvClient exposes generic state; for the grader score we use
-        # a separate HTTP call handled by the runner below.
-        pass
-    except Exception:
-        pass
+    # Success heuristic — from the last observation, count services still
+    # healthy. pipeline_environment records success = final_health >= 50 and
+    # no broke_healthy, but broke_healthy lives only in episode_history on
+    # the server side; the EnvClient doesn't expose it. "Majority-healthy"
+    # is a reasonable client-side proxy.
+    final_obs_dict = obs.model_dump() if hasattr(obs, "model_dump") else obs
+    final_services = final_obs_dict.get("services", []) or []
+    healthy_count = sum(
+        1 for s in final_services
+        if (s.get("health") if isinstance(s, dict) else getattr(s, "health", None)) == "healthy"
+    )
+    total_services = max(len(final_services), 1)
+    healthy_ratio = healthy_count / total_services
+    success = healthy_ratio >= 0.6 and reward_sum > 0.0
+    all_3_modes = len(roles_used) >= 3
 
     return {
         "task": task,
@@ -162,8 +236,11 @@ def run_episode(client, model_adapter, task: str, seed_offset: int) -> Dict[str,
         "rewards_per_step": [round(x, 4) for x in rewards],
         "roles_used": sorted(roles_used),
         "num_roles_used": len(roles_used),
+        "all_3_modes_used": all_3_modes,
         "handoff_notes_count": len(handoff_scores),
         "done": done,
+        "success": success,
+        "healthy_ratio": round(healthy_ratio, 3),
     }
 
 
@@ -178,11 +255,15 @@ def summarize(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         rewards = [v["reward_sum"] for v in runs.values()]
         steps = [v["steps"] for v in runs.values()]
         roles = [v["num_roles_used"] for v in runs.values()]
+        successes = [1 if v.get("success") else 0 for v in runs.values()]
+        all3 = [1 if v.get("all_3_modes_used") else 0 for v in runs.values()]
         summary[task] = {
             "avg_reward": round(statistics.mean(rewards), 4) if rewards else 0.0,
             "std_reward": round(statistics.pstdev(rewards), 4) if len(rewards) > 1 else 0.0,
             "avg_steps": round(statistics.mean(steps), 2) if steps else 0.0,
             "avg_roles_used": round(statistics.mean(roles), 2) if roles else 0.0,
+            "success_rate": round(statistics.mean(successes), 3) if successes else 0.0,
+            "all_3_modes_hit_rate": round(statistics.mean(all3), 3) if all3 else 0.0,
             "n": len(runs),
         }
     return summary
@@ -194,14 +275,36 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     p = argparse.ArgumentParser(description="Baseline / trained-model eval for DevOps Pipeline Gym")
     p.add_argument("--model", required=True,
-                   help="HF hub id OR path to a local adapter directory")
+                   help="HF hub id OR path to a local adapter directory OR HF Router model name (with --use-hf-router)")
     p.add_argument("--env-url", default="http://localhost:8000")
     p.add_argument("--output", required=True, help="Path to write result JSON")
     p.add_argument("--n-seeds", type=int, default=3)
+    p.add_argument("--use-hf-router", action="store_true",
+                   help="Call model via HF Inference Router (openai-compatible). "
+                        "Uses HF_TOKEN from env/.env. No GPU required.")
+    p.add_argument("--api-base-url", default=None,
+                   help="Override HF router URL (default https://router.huggingface.co/v1)")
+    p.add_argument("--temperature", type=float, default=0.0,
+                   help="Sampling temperature for --use-hf-router (default 0.0 greedy)")
+    p.add_argument("--max-tokens", type=int, default=300,
+                   help="Max completion tokens for --use-hf-router")
     args = p.parse_args()
 
-    logger.info("Loading model: %s", args.model)
-    adapter = _ModelAdapter(args.model).load()
+    # Load .env for HF_TOKEN if present alongside the script tree.
+    for candidate in (Path(__file__).resolve().parent.parent / ".env",
+                      Path.cwd() / ".env"):
+        _load_env_file(candidate)
+
+    logger.info("Loading model: %s (hf_router=%s)", args.model, args.use_hf_router)
+    if args.use_hf_router:
+        adapter = _HFRouterAdapter(
+            args.model,
+            api_base_url=args.api_base_url,
+            temperature=args.temperature,
+            max_tokens=args.max_tokens,
+        ).load()
+    else:
+        adapter = _ModelAdapter(args.model).load()
 
     all_results: List[Dict[str, Any]] = []
     with DevopsPipelineEnv(base_url=args.env_url).sync() as client:
@@ -216,7 +319,9 @@ def main():
                         "task": task, "seed_offset": seed_offset, "steps": 0,
                         "reward_sum": 0.0, "rewards_per_step": [],
                         "roles_used": [], "num_roles_used": 0,
+                        "all_3_modes_used": False,
                         "handoff_notes_count": 0, "done": False,
+                        "success": False, "healthy_ratio": 0.0,
                         "error": f"{type(e).__name__}: {e}",
                     }
                 all_results.append(rec)
