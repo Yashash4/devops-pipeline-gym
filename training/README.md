@@ -43,19 +43,27 @@ Success = `dryrun/final/` contains an adapter, `dryrun/reward_curve.png` exists,
 
 ## Saturday H100 real training
 
+See **[SATURDAY_PLAYBOOK.md](SATURDAY_PLAYBOOK.md)** for the full runbook with
+tier-escalation plan, timings, and recovery procedures.
+
+Quick reference (primary Tier 1 command):
+
 ```bash
 python training/grpo_train.py \
     --model unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit \
     --env-url http://127.0.0.1:8000 \
-    --max-steps 100 \
+    --max-steps 150 \
     --num-generations 8 \
     --max-completion-length 512 \
-    --batch-size 1 \
-    --grad-accum 4 \
+    --prompts-per-task 6 \
     --learning-rate 5e-6 \
-    --use-vllm \
-    --output-dir ./outputs/run1
+    --output-dir ./runs/saturday_v1
 ```
+
+Notes:
+- `--num-generations 8` minimum (T4 dry-run with 2 got `frac_reward_zero_std=0.5`).
+- `--max-completion-length 512` on H100 (256 was the T4 ceiling — every completion clipped).
+- `--use-vllm` is NOT in the primary run. Add only after Tier 1 converges and you want faster rollouts; it's brittle with GRPO+Unsloth.
 
 Escalation tiers if reward is flat — see `round2/REF/PHASE_EXECUTION.md` Phase 10 decision tree.
 
