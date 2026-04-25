@@ -63,19 +63,39 @@ print(f"    SFT adapter at: {sft_path}", flush=True)
 
 # Step 4: Boot env-server in background
 print("[4/7] Booting env-server on localhost:8000...", flush=True)
+env_log_path = "/workspace/env_server.log"
+env_log_fh = open(env_log_path, "w")
 env_proc = subprocess.Popen(
     [
         sys.executable, "-m", "uvicorn", "server.app:app",
         "--host", "127.0.0.1", "--port", "8000",
+        "--log-level", "info",
     ],
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
+    stdout=env_log_fh,
+    stderr=subprocess.STDOUT,
 )
+print(f"    env-server PID: {env_proc.pid}, logs: {env_log_path}", flush=True)
 
-time.sleep(8)
+# Give uvicorn time to boot. L4 cold start + import-time work can be slow.
+time.sleep(15)
 
-# Verify env is responding
-for i in range(10):
+health_ok = False
+last_error = None
+
+# Try up to 90 more seconds (60 attempts at 1.5s each)
+for i in range(60):
+    # Check if process died
+    if env_proc.poll() is not None:
+        env_log_fh.flush()
+        with open(env_log_path) as f:
+            log_content = f.read()
+        print(f"    env-server PROCESS DIED with exit code {env_proc.returncode}", flush=True)
+        print(f"    --- env-server log ---", flush=True)
+        print(log_content[-3000:], flush=True)
+        print(f"    --- end log ---", flush=True)
+        raise RuntimeError(f"env-server died during boot. Exit: {env_proc.returncode}")
+
+    # Try /reset health check
     try:
         req = urllib.request.Request(
             "http://localhost:8000/reset",
@@ -85,14 +105,32 @@ for i in range(10):
         )
         with urllib.request.urlopen(req, timeout=5) as r:
             if r.status == 200:
-                print(f"    Env-server is healthy (after {8 + i*2}s)", flush=True)
-                break
-    except Exception:
-        pass
-    time.sleep(2)
-else:
+                # Also verify /tasks responds (stricter check)
+                req2 = urllib.request.Request("http://localhost:8000/tasks")
+                with urllib.request.urlopen(req2, timeout=5) as r2:
+                    if r2.status == 200:
+                        print(f"    Env-server is healthy (after {15 + i*1.5:.0f}s)", flush=True)
+                        health_ok = True
+                        break
+    except Exception as e:
+        last_error = str(e)[:120]
+
+    time.sleep(1.5)
+
+if not health_ok:
+    env_log_fh.flush()
+    with open(env_log_path) as f:
+        log_content = f.read()
+    print(f"    Health check FAILED. Last error: {last_error}", flush=True)
+    print(f"    --- env-server log (last 3KB) ---", flush=True)
+    print(log_content[-3000:], flush=True)
+    print(f"    --- end log ---", flush=True)
     env_proc.terminate()
-    raise RuntimeError("env-server failed to come up in 28s")
+    try:
+        env_proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        env_proc.kill()
+    raise RuntimeError(f"env-server failed to come up in 105s")
 
 try:
     # Step 5: Run GRPO training
