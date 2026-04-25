@@ -27,7 +27,7 @@ bitsandbytes>=0.43
 datasets>=2.20
 matplotlib>=3.8
 accelerate>=0.30
-# httpx needed by server/judge_client.py if training runs with --use-judge.
-# Also listed in base requirements.txt already; repeated here for clarity
-# when someone installs only the training extras.
+# httpx is also listed in base requirements.txt already; repeated here for
+# clarity when someone installs only the training extras (e.g. on a Kaggle
+# image where the base requirements weren't installed first).
 httpx>=0.25

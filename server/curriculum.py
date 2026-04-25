@@ -152,6 +152,37 @@ class CurriculumController:
             return self._pick_medium()
         return self._pick_hard()
 
+    def dump_progress(self) -> Dict[str, object]:
+        """Read-only mastery snapshot for external observation.
+
+        Used by Phase J.7 /curriculum_progress endpoint and Phase M's GRPO
+        polling callback. Does NOT mutate curriculum state. Returns valid
+        empty dicts when no episode has been recorded yet.
+        """
+        per_task: Dict[str, Dict[str, float]] = {}
+        for t, (s, a) in self.tracker.per_task.items():
+            per_task[t] = {
+                "successes": s,
+                "attempts": a,
+                "rate": (s / a) if a > 0 else 0.0,
+            }
+        per_failure: Dict[str, Dict[str, float]] = {}
+        for f, (s, a) in self.tracker.per_failure.items():
+            per_failure[f] = {
+                "successes": s,
+                "attempts": a,
+                "rate": (s / a) if a > 0 else 0.0,
+            }
+        recent = list(self.tracker.recent_rewards)
+        return {
+            "per_task": per_task,
+            "per_failure": per_failure,
+            "recent_rewards_mean": (sum(recent) / len(recent)) if recent else 0.0,
+            "recent_rewards_count": len(recent),
+            "overall_mastery": self._overall_mastery(),
+            "is_plateau": self.tracker.is_plateau(),
+        }
+
     def get_weak_failure_types(self, top_n: int = 2) -> List[str]:
         """Return failure types with lowest mastery, lowest first.
 

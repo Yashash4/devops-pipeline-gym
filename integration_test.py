@@ -560,7 +560,7 @@ report("record_role appends in order",
        router7.history == [Role.SRE, Role.DEV])
 
 # test_round1_regression_no_role_field — old-style Round 1 action with NO role field
-# MUST parse cleanly and default to SRE, and handoff_notes must default to None.
+# MUST parse cleanly and default to SRE.
 legacy_raw = {"action_type": "view_pipeline"}
 legacy_action = PipelineAction(**legacy_raw)
 report("test_round1_regression_no_role_field: parses",
@@ -568,8 +568,6 @@ report("test_round1_regression_no_role_field: parses",
 report("test_round1_regression_no_role_field: default role=sre",
        legacy_action.role == Role.SRE,
        f"got={legacy_action.role.value}")
-report("test_round1_regression_no_role_field: default handoff_notes=None",
-       legacy_action.handoff_notes is None)
 
 # Old-style full Round 1 action dict (matches what inference.py has historically produced)
 legacy_deploy_raw = {
@@ -587,21 +585,16 @@ new_action = PipelineAction(
     service_name="cache-service",
     config_edits=[ConfigEdit(key="redis.host", value="redis-prod.internal:6379")],
     role=Role.DEV,
-    handoff_notes="found stale redis host in cache-service config, changing to prod endpoint",
 )
 report("Round 2 action with explicit role=DEV parses",
        new_action.role == Role.DEV)
-report("Round 2 action carries handoff_notes",
-       new_action.handoff_notes and "redis" in new_action.handoff_notes)
 
-# Observation default fields present and default to SRE / empty / None
+# Observation default fields present and default to SRE / empty
 obs_default_round2 = PipelineObservation(task_description="x", goal="y")
 report("obs default current_role=SRE",
        obs_default_round2.current_role == Role.SRE)
 report("obs default role_history=[]",
        obs_default_round2.role_history == [])
-report("obs default previous_handoff=None",
-       obs_default_round2.previous_handoff is None)
 
 
 # ============================================================================
@@ -815,446 +808,24 @@ report("test_round1_regression_still_passes: env still boots after curriculum ad
 
 
 # ============================================================================
-# TEST 14: Round 2 Phase 3 — Ollama client + Adversarial designer
+# TEST 14: Round 2 Phase 3 — REMOVED in v2 cleanup
 # ============================================================================
-print("\n=== TEST 14: Round 2 Phase 3 — Ollama client + designer ===", flush=True)
+# Ollama client + Adversarial designer test block removed in Phase H —
+# both modules were cut in Phase A (kube-sre-gym overlap / DQ risk).
 
-# Load .env manually so downstream tests see OLLAMA_API_KEY / DESIGNER_MODEL
-# without requiring python-dotenv.
-_env_file = os.path.join(os.path.dirname(__file__), ".env")
-if os.path.exists(_env_file):
-    with open(_env_file) as _f:
-        for _line in _f:
-            _line = _line.strip()
-            if not _line or _line.startswith("#") or "=" not in _line:
-                continue
-            _k, _v = _line.split("=", 1)
-            os.environ.setdefault(_k.strip(), _v.strip())
-
-from server.ollama_client import OllamaClient, _strip_code_fence
-from server.adversarial_designer import (
-    AdversarialDesigner,
-    GeneratedScenario,
-    DESIGNER_PROMPT,
-)
-
-# --- Offline tests (always run) ---------------------------------------------
-
-# test_ollama_client_graceful_without_key
-_saved_key = os.environ.pop("OLLAMA_API_KEY", None)
-try:
-    c_no_key = OllamaClient()
-    report("test_ollama_client_graceful_without_key: api_key is None",
-           c_no_key.api_key is None)
-    report("test_ollama_client_graceful_without_key: generate returns None",
-           c_no_key.generate("s", "u") is None)
-    # test_ollama_client_graceful_without_key_for_generate_json
-    report("test_ollama_client_graceful_without_key_for_generate_json",
-           c_no_key.generate_json("s", "u") is None)
-
-    # test_designer_initializes_without_crash (no API key)
-    d_no_key = AdversarialDesigner()
-    report("test_designer_initializes_without_crash",
-           d_no_key.model and d_no_key.client.api_key is None)
-    report("designer.generate returns None without key",
-           d_no_key.generate(["config_error"]) is None)
-    report("designer.generate([]) returns None",
-           d_no_key.generate([]) is None)
-finally:
-    if _saved_key is not None:
-        os.environ["OLLAMA_API_KEY"] = _saved_key
-
-# _strip_code_fence covers markdown ```json and plain ``` fences
-report("_strip_code_fence handles ```json fence",
-       _strip_code_fence("```json\n{\"a\":1}\n```") == '{"a":1}')
-report("_strip_code_fence handles bare ``` fence",
-       _strip_code_fence("```\n{\"a\":1}\n```") == '{"a":1}')
-report("_strip_code_fence leaves plain json alone",
-       _strip_code_fence('{"a":1}') == '{"a":1}')
-
-# test_designer_parse_rejects_incomplete_json (missing required field)
-d_parse = AdversarialDesigner()
-bad1 = d_parse._parse({"description": "x", "goal": "y"}, ["x"])
-report("test_designer_parse_rejects_incomplete_json: missing root_cause",
-       bad1 is None)
-bad2 = d_parse._parse({"description": "x", "goal": "y", "root_cause": "r"}, ["x"])
-report("designer._parse rejects missing initial_failures", bad2 is None)
-bad3 = d_parse._parse(
-    {"description": "x", "goal": "y", "root_cause": "r", "initial_failures": []},
-    ["x"],
-)
-report("designer._parse rejects empty initial_failures", bad3 is None)
-bad4 = d_parse._parse(
-    {"description": "x", "goal": "y", "root_cause": "r", "initial_failures": "not a list"},
-    ["x"],
-)
-report("designer._parse rejects non-list initial_failures", bad4 is None)
-
-# _parse accepts minimal valid (must clear the 3-step floor added in Phase 3 cleanup)
-good = d_parse._parse(
-    {
-        "description": "d",
-        "goal": "g",
-        "root_cause": "r",
-        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
-        "expected_diagnosis_steps": ["view_logs auth-service", "view_config auth-service"],
-        "expected_fix_actions": ["edit_config auth-service"],
-    },
-    ["config_error"],
-)
-report("designer._parse accepts minimal valid JSON",
-       good is not None and good.max_steps == 12 and good.difficulty == "hard")
-report("_parse falls back scenario_id when missing",
-       good is not None and good.scenario_id.startswith("adv_"),
-       f"got={good.scenario_id if good else 'None'}")
-
-# test_designer_parse_rejects_below_step_floor (Phase 3 cleanup)
-below_floor = d_parse._parse(
-    {
-        "description": "d",
-        "goal": "g",
-        "root_cause": "r",
-        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
-        "expected_diagnosis_steps": ["view_logs"],
-        "expected_fix_actions": [],
-    },
-    ["config_error"],
-)
-report("designer._parse rejects below 3-step floor (total=1)", below_floor is None)
-
-# test_designer_parse_truncates_over_budget (Phase 3 cleanup)
-over_budget = d_parse._parse(
-    {
-        "description": "d",
-        "goal": "g",
-        "root_cause": "r",
-        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
-        "expected_diagnosis_steps": [f"view_logs-{i}" for i in range(6)],
-        "expected_fix_actions":       [f"edit_config-{i}" for i in range(4)],
-    },
-    ["config_error"],
-)
-report("test_designer_parse_truncates_over_budget: scenario still returned",
-       over_budget is not None)
-report("test_designer_parse_truncates_over_budget: total trimmed to 8",
-       over_budget is not None and
-       (len(over_budget.expected_diagnosis_steps) + len(over_budget.expected_fix_actions)) == 8,
-       f"got diag={len(over_budget.expected_diagnosis_steps)}, "
-       f"fix={len(over_budget.expected_fix_actions)}")
-# 6/10 -> ratio 0.6 -> round(8*0.6)=5 diag, 3 fix
-report("test_designer_parse_truncates_over_budget: proportional split 5+3",
-       over_budget is not None and len(over_budget.expected_diagnosis_steps) == 5
-       and len(over_budget.expected_fix_actions) == 3)
-# Both lists must keep at least 1 entry even at extreme ratios
-edge = d_parse._parse(
-    {
-        "description": "d", "goal": "g", "root_cause": "r",
-        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
-        "expected_diagnosis_steps": [f"view_{i}" for i in range(12)],
-        "expected_fix_actions": ["edit_config one"],
-    },
-    ["config_error"],
-)
-report("step-budget truncation keeps ≥1 fix action even when ratio is extreme",
-       edge is not None and len(edge.expected_fix_actions) >= 1
-       and (len(edge.expected_diagnosis_steps) + len(edge.expected_fix_actions)) == 8)
-# And ≥1 diagnosis when all mass is on the fix side
-edge2 = d_parse._parse(
-    {
-        "description": "d", "goal": "g", "root_cause": "r",
-        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
-        "expected_diagnosis_steps": [],
-        "expected_fix_actions": [f"fix_{i}" for i in range(12)],
-    },
-    ["config_error"],
-)
-report("step-budget truncation keeps ≥1 diagnosis step even when 0 supplied",
-       edge2 is None,  # total=12 is above floor; but 0 diag means we'd need synth data. Spec says keep ≥1 of each from SOURCE; if source has 0, we can't conjure one.
-       f"got={edge2}")
-# Actually — spec says "Keep at least 1 diagnosis step and 1 fix step". If source list is empty,
-# there's nothing to keep. _enforce_step_budget.new_diag clamps against len(source), so this
-# case returns diag=0, fix=8 — which violates "≥1 each". Accept that None or accept that we
-# return what we have: reject for cleanliness. Current impl trims to min(1, 0)=0 diag which
-# violates the contract. Assertion above asserts reject-on-zero-source-list behaviour is None.
-
-# test_designer_cache_returns_same_scenario — monkey-patch generate_json
-# so we don't need a live LLM. Two calls with same weak_spots must return
-# the IDENTICAL object from cache (not a fresh parse).
-d_cache = AdversarialDesigner()
-_call_count = {"n": 0}
-def _fake_json(system, user, temperature=0.7, max_tokens=2048):
-    _call_count["n"] += 1
-    return {
-        "scenario_id": "adv_fake",
-        "description": "fake scenario",
-        "goal": "fake goal",
-        "root_cause": "fake cause",
-        "initial_failures": [{"service": "x", "failure_type": "y", "severity": "moderate"}],
-        "expected_diagnosis_steps": ["view_logs", "view_config"],
-        "expected_fix_actions": ["edit_config"],
-        "max_steps": 10,
-        "difficulty": "hard",
-    }
-d_cache.client.generate_json = _fake_json
-s1 = d_cache.generate(["config_error"])
-s2 = d_cache.generate(["config_error"])
-report("test_designer_cache_returns_same_scenario: identical object",
-       s1 is not None and s1 is s2)
-report("cache prevents second LLM call for same weak_spots",
-       _call_count["n"] == 1,
-       f"call_count={_call_count['n']}")
-# use_cache=False forces fresh call
-s3 = d_cache.generate(["config_error"], use_cache=False)
-report("use_cache=False bypasses cache",
-       _call_count["n"] == 2 and s3 is not None and s3 is not s1,
-       f"call_count={_call_count['n']}")
-# Different weak_spots → different cache key, new call
-s4 = d_cache.generate(["memory_leak"])
-report("different weak_spots → separate cache entry",
-       _call_count["n"] == 3 and s4 is not s1)
-
-# to_scenario_spec shape — what Phase 5 consumes
-spec_dict = good.to_scenario_spec()
-report("GeneratedScenario.to_scenario_spec has required keys",
-       set(spec_dict.keys()) == {"task_id", "description", "goal", "max_steps", "initial_failures"})
-
-# Designer respects DESIGNER_MODEL env var
-os.environ["DESIGNER_MODEL"] = "test-model:7b"
-d_envmodel = AdversarialDesigner()
-report("AdversarialDesigner reads DESIGNER_MODEL env var",
-       d_envmodel.model == "test-model:7b")
-os.environ.pop("DESIGNER_MODEL", None)
-# Explicit model arg wins over env
-os.environ["DESIGNER_MODEL"] = "env-model:7b"
-d_explicit = AdversarialDesigner(model="arg-model:7b")
-report("AdversarialDesigner explicit model overrides env",
-       d_explicit.model == "arg-model:7b")
-os.environ.pop("DESIGNER_MODEL", None)
-
-# Prompt template contains the weak_spots marker and the service list
-report("DESIGNER_PROMPT references weak_spots",
-       "{weak_spots}" in DESIGNER_PROMPT)
-report("DESIGNER_PROMPT lists all 5 services",
-       all(s in DESIGNER_PROMPT for s in
-           ["database-primary", "auth-service", "api-gateway", "cache-service", "web-frontend"]))
-
-# --- Live tests (only when OLLAMA_API_KEY is set) ---------------------------
-_live_key = os.environ.get("OLLAMA_API_KEY")
-if _live_key:
-    print("\n--- Live tests (OLLAMA_API_KEY present) ---", flush=True)
-    try:
-        # test_ollama_client_generate_json_returns_dict_live
-        # Marked requires_ollama: relies on Ollama Cloud network availability.
-        # Flaky on first-call cold-start; the client retries with backoff
-        # internally. If all retries still return None, SKIP (not FAIL) so
-        # a network blip doesn't spuriously break the suite.
-        live_client = OllamaClient()
-        live_ping = live_client.generate_json(
-            "Return strict JSON only.",
-            'Respond with {"ok": true, "ping": "pong"} and nothing else.',
-            temperature=0.0,
-            max_tokens=80,
-        )
-        if live_ping is None:
-            report_skip(
-                "test_ollama_client_generate_json_returns_dict_live (requires_ollama)",
-                "Ollama Cloud ping returned None after retries — network/service unavailable",
-            )
-        else:
-            report("test_ollama_client_generate_json_returns_dict_live",
-                   isinstance(live_ping, dict),
-                   f"got={live_ping}")
-
-        # test_designer_generates_valid_scenario_live
-        live_d = AdversarialDesigner()
-        live_s = live_d.generate(["config_error"])
-        if live_s is None:
-            report_skip(
-                "test_designer_generates_valid_scenario_live (requires_ollama)",
-                "designer returned None after retries — network/service unavailable",
-            )
-        else:
-            live_ok = (
-                bool(live_s.description)
-                and bool(live_s.goal)
-                and bool(live_s.root_cause)
-                and isinstance(live_s.initial_failures, list)
-                and len(live_s.initial_failures) >= 1
-            )
-            report("test_designer_generates_valid_scenario_live",
-                   live_ok,
-                   f"desc={live_s.description}")
-    except Exception as _e:
-        report_skip(
-            "live tests errored (requires_ollama)",
-            f"exc={type(_e).__name__}: {_e}",
-        )
-else:
-    print("(skipping live tests — OLLAMA_API_KEY not set)", flush=True)
 
 
 # ============================================================================
-# TEST 15: Round 2 Phase 4 — Hand-off metrics
+# TEST 15: Round 2 Phase 4 — REMOVED in v2 cleanup
 # ============================================================================
-print("\n=== TEST 15: Round 2 Phase 4 — Hand-off metrics ===", flush=True)
-
-from devops_pipeline_gym.server.handoff_metrics import (
-    HandoffTracker,
-    HandoffQuality,
-)
-# Role / ServiceStatus / ServiceHealth already imported in the Phase 1 / Phase 2 blocks above.
-
-
-def _mk_svc(name, health=ServiceHealth.HEALTHY):
-    return ServiceStatus(
-        name=name, health=health, current_version="1.0.0",
-        cpu_percent=10.0, memory_percent=20.0,
-        error_rate=0.0, request_latency_ms=50.0,
-        active_connections=10, last_deploy_timestamp="2026-04-24T00:00:00Z",
-    )
-
-
-_svcs = [_mk_svc("api-gateway"), _mk_svc("cache-service", ServiceHealth.DEGRADED), _mk_svc("auth-service")]
-
-# test_handoff_quality_good_note (all 3 signals → ≥0.7; perfect = 1.0)
-t = HandoffTracker()
-q_good = t.score_handoff(
-    Role.SRE, Role.DEV,
-    "cache-service logs show config error — edit redis.host to fix",
-    None, _svcs,
-)
-report("test_handoff_quality_good_note: all three signals present",
-       q_good.has_context and q_good.has_diagnosis and q_good.has_target_action)
-report("test_handoff_quality_good_note: score ≥ 0.7 (is 1.0)",
-       q_good.quality_score >= 0.7, f"score={q_good.quality_score:.2f}")
-
-# test_handoff_quality_empty_note — empty notes FROM SRE score 0.0
-t_empty_sre = HandoffTracker()
-q_empty_sre = t_empty_sre.score_handoff(Role.SRE, Role.DEV, "", None, _svcs)
-report("test_handoff_quality_empty_note: SRE empty note scores 0.0",
-       q_empty_sre.quality_score == 0.0, f"score={q_empty_sre.quality_score}")
-# None is treated as empty
-q_none = t_empty_sre.score_handoff(Role.SRE, Role.DEV, None, None, _svcs)
-report("test_handoff_quality_empty_note: None treated as empty (SRE scores 0.0)",
-       q_none.quality_score == 0.0)
-# Non-SRE empty: auto-diag (0.4) still granted per BATTLEPLAN rubric — document behaviour
-q_empty_dev = t_empty_sre.score_handoff(Role.DEV, Role.OPS, "", None, _svcs)
-report("empty DEV note: non-SRE still auto-granted diagnosis (0.4)",
-       q_empty_dev.quality_score == 0.4 and not q_empty_dev.has_diagnosis)
-
-# test_handoff_quality_sre_requires_diagnosis — SRE without diagnosis keyword loses 0.4
-t2 = HandoffTracker()
-# context (cache-service) + action (deploy) but no diagnosis keyword.
-q_sre_no_diag = t2.score_handoff(
-    Role.SRE, Role.OPS,
-    "cache-service is broken; deploy hotfix now",  # no diagnosis keyword
-    None, _svcs,
-)
-report("test_handoff_quality_sre_requires_diagnosis: no diagnosis → has_diagnosis=False",
-       q_sre_no_diag.has_diagnosis is False)
-report("test_handoff_quality_sre_requires_diagnosis: score = 0.6 (0.3 ctx + 0.3 action)",
-       abs(q_sre_no_diag.quality_score - 0.6) < 1e-9,
-       f"score={q_sre_no_diag.quality_score}")
-
-# Positive control for SRE — diagnosis keyword restores the 0.4
-q_sre_with_diag = t2.score_handoff(
-    Role.SRE, Role.OPS,
-    "cache-service logs show root cause config error; deploy fix",
-    None, _svcs,
-)
-report("SRE with diagnosis keyword restores 0.4 (score = 1.0)",
-       q_sre_with_diag.has_diagnosis and q_sre_with_diag.quality_score == 1.0)
-
-# test_handoff_quality_non_sre_auto_diagnosis — Dev/Ops handoffs get auto 0.4 without keyword
-t3 = HandoffTracker()
-q_dev = t3.score_handoff(
-    Role.DEV, Role.OPS,
-    "cache-service ready; please deploy",  # no diagnosis keyword
-    None, _svcs,
-)
-report("test_handoff_quality_non_sre_auto_diagnosis (DEV): score = 1.0 without diagnosis keyword",
-       q_dev.quality_score == 1.0 and q_dev.has_diagnosis is False,
-       f"score={q_dev.quality_score} has_diag={q_dev.has_diagnosis}")
-
-q_ops = t3.score_handoff(
-    Role.OPS, Role.SRE,
-    "api-gateway is stable; please continue monitoring and restart if needed",
-    None, _svcs,
-)
-report("test_handoff_quality_non_sre_auto_diagnosis (OPS): auto 0.4 diagnosis granted",
-       q_ops.has_diagnosis is False and q_ops.quality_score >= 0.7,
-       f"score={q_ops.quality_score}")
-
-# test_handoff_tracker_average_empty_returns_zero
-t_empty = HandoffTracker()
-report("test_handoff_tracker_average_empty_returns_zero",
-       t_empty.average_quality() == 0.0)
-
-# test_handoff_tracker_average_multiple_handoffs
-t4 = HandoffTracker()
-t4.score_handoff(Role.SRE, Role.DEV, "cache-service config error; edit redis.host", None, _svcs)  # 1.0
-t4.score_handoff(Role.DEV, Role.OPS, "", None, _svcs)                                              # 0.4
-t4.score_handoff(Role.OPS, Role.SRE, "api-gateway healthy; restart auth-service if needed", None, _svcs)  # 1.0
-# Expected avg = (1.0 + 0.4 + 1.0) / 3 = 0.8
-avg = t4.average_quality()
-report("test_handoff_tracker_average_multiple_handoffs: computes correct mean",
-       abs(avg - (1.0 + 0.4 + 1.0) / 3) < 1e-9,
-       f"avg={avg:.4f}")
-
-# Tracker logs every scored hand-off
-report("HandoffTracker.handoffs grows with each scored call",
-       len(t4.handoffs) == 3)
-
-# to_dict serialization round-trip (shape check)
-d = t4.to_dict()
-report("to_dict has num_handoffs, avg_quality, handoffs list",
-       set(d.keys()) == {"num_handoffs", "avg_quality", "handoffs"}
-       and d["num_handoffs"] == 3
-       and isinstance(d["handoffs"], list)
-       and len(d["handoffs"]) == 3)
-report("to_dict handoff entries carry role values + score",
-       all("from" in h and "to" in h and "score" in h for h in d["handoffs"]))
-
-# No-service-list → context cannot be found regardless of notes
-t5 = HandoffTracker()
-q_no_svcs = t5.score_handoff(
-    Role.SRE, Role.DEV,
-    "cache-service is failing due to config error; edit the config",
-    None, None,
-)
-report("empty current_services → has_context False",
-       q_no_svcs.has_context is False)
-# But diagnosis + action still count; SRE with diagnosis keyword scores 0.4 + 0.3 = 0.7
-report("empty current_services: SRE with diagnosis+action still scores 0.7",
-       abs(q_no_svcs.quality_score - 0.7) < 1e-9,
-       f"score={q_no_svcs.quality_score}")
-
-# Service-name match is case-insensitive (notes might be written in different cases)
-t6 = HandoffTracker()
-q_case = t6.score_handoff(
-    Role.DEV, Role.OPS,
-    "API-GATEWAY deploy ready",  # uppercase service name
-    None, _svcs,
-)
-report("service name match is case-insensitive",
-       q_case.has_context is True, f"has_context={q_case.has_context}")
-
-# Round 1 regression — module is import-only, integration happens in Phase 5.
-# Re-verify env still boots with all Round 2 modules loaded.
-os.environ["DEVOPS_TASK"] = "clean_deploy"
-from server.pipeline_environment import PipelineEnvironment as _PEnvAfterHandoff
-_regr = _PEnvAfterHandoff()
-_regr_obs = _regr.reset()
-report("Round 1 regression: env still boots after handoff_metrics added",
-       _regr_obs.services and _regr_obs.step_number == 0)
+# Hand-off metrics test block removed in Phase H — handoff_metrics module
+# was cut in Phase A (kube-sre-gym overlap / DQ risk).
 
 
 # ============================================================================
 # TEST 16: Round 2 Phase 5 — Environment integration
 # ============================================================================
 print("\n=== TEST 16: Round 2 Phase 5 — Environment integration ===", flush=True)
-
-from server.rewards import COORDINATION_BONUS_EPISODE_CAP
 
 # test_round1_regression_all_6_tasks — each task still boots + accepts Round 1
 # old-style actions without role + returns non-crash observations.
@@ -1304,31 +875,9 @@ obs_wa = env_wa.step(wrong_action_type)
 report("invalid action-for-role: reward = -0.10",
        abs(obs_wa.reward - (-0.10)) < 1e-9, f"got={obs_wa.reward}")
 
-# test_coordination_bonus_capped_per_episode — manually inject 10 perfect
-# handoffs; verify cumulative bonus caps at COORDINATION_BONUS_EPISODE_CAP.
-env_cap = PipelineEnvironment()
-env_cap.reset(task="broken_pipeline")
-coord_before = env_cap._coordination_bonus_accumulated
-# Drive 10 role-transitioning handoffs in a row with perfect notes.
-# To force a role transition every step we manually alternate _current_role.
-for i in range(10):
-    env_cap._current_role = Role.SRE if i % 2 == 0 else Role.DEV
-    a = PipelineAction(
-        action_type=ActionType.VIEW_LOGS if i % 2 == 0 else ActionType.EDIT_CONFIG,
-        service_name="cache-service",
-        config_edits=[ConfigEdit(key="redis.host", value="redis-prod.internal:6379")] if i % 2 == 1 else None,
-        role=Role.SRE if i % 2 == 0 else Role.DEV,
-        handoff_notes="cache-service logs show root cause config error; edit redis.host to fix" if i % 2 == 0 else "cache-service config edited; please deploy hotfix",
-    )
-    env_cap.step(a)
-    if env_cap._state.step_count >= env_cap._max_steps:
-        break
-report("test_coordination_bonus_capped_per_episode: cumulative ≤ cap",
-       env_cap._coordination_bonus_accumulated <= COORDINATION_BONUS_EPISODE_CAP + 1e-9,
-       f"accumulated={env_cap._coordination_bonus_accumulated:.4f} cap={COORDINATION_BONUS_EPISODE_CAP}")
-report("test_coordination_bonus_capped_per_episode: cap is approached (>0)",
-       env_cap._coordination_bonus_accumulated > 0.0,
-       f"accumulated={env_cap._coordination_bonus_accumulated:.4f}")
+# test_coordination_bonus_capped_per_episode — REMOVED in v2 cleanup
+# (handoff_quality_reward + COORDINATION_BONUS_EPISODE_CAP cut in Phase C;
+# pipeline_environment._coordination_bonus_accumulated state cut in Phase D).
 
 # test_curriculum_records_episode_on_done
 env_c = PipelineEnvironment()
@@ -1343,25 +892,25 @@ report("test_curriculum_records_episode_on_done: curriculum tracker has 1 entry"
        f"per_task={dict(env_c._curriculum.tracker.per_task)}")
 
 # test_full_episode_with_all_3_roles — use all 3 roles in one episode and
-# verify the specialization bonus fires on done=True.
+# verify role-tracking + role_history on obs work end-to-end.
+# (specialization-bonus aspect cut in Phase C; this test now covers
+# role_history population + episode termination only.)
 env_all = PipelineEnvironment()
 env_all.reset(task="broken_pipeline")
 # Nudge env's current_role to each of the 3 in turn, send matching action.
 triples = [
-    (Role.SRE, ActionType.VIEW_PIPELINE, None, "SRE investigating pipeline state"),
-    (Role.DEV, ActionType.EDIT_CONFIG, [ConfigEdit(key="redis.host", value="redis-prod.internal:6379")],
-        "cache-service config edited, ready for deploy"),
-    (Role.OPS, ActionType.APPROVE, None, "approving final state"),
+    (Role.SRE, ActionType.VIEW_PIPELINE, None),
+    (Role.DEV, ActionType.EDIT_CONFIG, [ConfigEdit(key="redis.host", value="redis-prod.internal:6379")]),
+    (Role.OPS, ActionType.APPROVE, None),
 ]
 final_obs = None
-for role_, atype, cfg, notes in triples:
+for role_, atype, cfg in triples:
     env_all._current_role = role_
     a = PipelineAction(
         action_type=atype,
         service_name="cache-service" if atype == ActionType.EDIT_CONFIG else None,
         config_edits=cfg,
         role=role_,
-        handoff_notes=notes,
         reason="done" if atype == ActionType.APPROVE else None,
     )
     final_obs = env_all.step(a)
@@ -1403,162 +952,16 @@ report("Round 1 optimal score reproducible after Phase 5 (clean_deploy)",
 
 
 # ============================================================================
-# TEST 17: Round 2 Phase 5.7 — Adversarial scenario wiring
+# TEST 17: Round 2 Phase 5.7 — REMOVED in v2 cleanup
 # ============================================================================
-print("\n=== TEST 17: Round 2 Phase 5.7 — Adversarial scenario wiring ===", flush=True)
-
-from devops_pipeline_gym.server.adversarial_designer import GeneratedScenario
-
-# Helper: construct a synthetic GeneratedScenario with known shape so tests
-# don't need the live Ollama API.
-def _make_fake_scenario(scenario_id, failures, max_steps=10):
-    return GeneratedScenario(
-        scenario_id=scenario_id,
-        description="test description",
-        goal="test goal",
-        root_cause="test root cause",
-        initial_failures=failures,
-        misleading_signals=["noise on unrelated metric"],
-        expected_diagnosis_steps=["view_logs cache-service", "view_config cache-service"],
-        expected_fix_actions=["edit_config cache-service"],
-        max_steps=max_steps,
-        difficulty="hard",
-    )
-
-
-# test_adversarial_scenario_loads_into_engine
-env_adv = PipelineEnvironment()
-env_adv.reset(task="clean_deploy")  # bootstrap any task first
-fake = _make_fake_scenario(
-    scenario_id="test_load",
-    failures=[
-        {"service": "cache-service", "failure_type": "config_error", "severity": "severe"},
-        {"service": "auth-service", "failure_type": "degraded_performance", "severity": "moderate"},
-    ],
-    max_steps=10,
-)
-applied = env_adv._load_adversarial_scenario(fake)
-report("test_adversarial_scenario_loads_into_engine: both services overlaid",
-       set(applied) == {"cache-service", "auth-service"},
-       f"applied={applied}")
-report("test_adversarial_scenario_loads_into_engine: severe → DOWN",
-       env_adv._engine.services["cache-service"].health.value == "down",
-       f"got={env_adv._engine.services['cache-service'].health.value}")
-report("test_adversarial_scenario_loads_into_engine: moderate → DEGRADED",
-       env_adv._engine.services["auth-service"].health.value == "degraded",
-       f"got={env_adv._engine.services['auth-service'].health.value}")
-report("test_adversarial_scenario_loads_into_engine: task_name is adv_*",
-       env_adv._task_name == "adv_test_load",
-       f"got={env_adv._task_name}")
-report("test_adversarial_scenario_loads_into_engine: max_steps from scenario",
-       env_adv._max_steps == 10, f"got={env_adv._max_steps}")
-report("test_adversarial_scenario_loads_into_engine: stashed on env",
-       env_adv._last_adversarial_scenario is fake)
-
-# test_adversarial_scenario_uses_only_5_services — hallucinated service names
-# must be dropped without crashing (defensive).
-env_adv2 = PipelineEnvironment()
-env_adv2.reset(task="clean_deploy")
-halluc = _make_fake_scenario(
-    scenario_id="halluc",
-    failures=[
-        {"service": "cache-service", "failure_type": "config_error", "severity": "severe"},
-        {"service": "3-memory-patch", "failure_type": "memory_leak", "severity": "severe"},  # fake
-        {"service": "full-stack", "failure_type": "cascading", "severity": "moderate"},      # fake
-    ],
-    max_steps=8,
-)
-applied2 = env_adv2._load_adversarial_scenario(halluc)
-report("test_adversarial_scenario_uses_only_5_services: only valid names applied",
-       set(applied2) == {"cache-service"},
-       f"applied={applied2}")
-report("test_adversarial_scenario_uses_only_5_services: engine has exactly 5 services",
-       set(env_adv2._engine.get_service_names()) ==
-       {"database-primary", "auth-service", "api-gateway", "cache-service", "web-frontend"})
-
-# Max-steps cap — designer claiming 50 must be clamped.
-env_adv3 = PipelineEnvironment()
-env_adv3.reset(task="clean_deploy")
-runaway = _make_fake_scenario(
-    scenario_id="runaway",
-    failures=[{"service": "cache-service", "failure_type": "config_error", "severity": "severe"}],
-    max_steps=50,
-)
-env_adv3._load_adversarial_scenario(runaway)
-report("adversarial max_steps clamped to env cap",
-       env_adv3._max_steps == 20, f"got={env_adv3._max_steps}")
-
-# Determinism: same scenario_id → same adversarial seed across instances
-env_d1 = PipelineEnvironment()
-env_d2 = PipelineEnvironment()
-report("_adversarial_seed is deterministic for scenario_id",
-       env_d1._adversarial_seed(fake) == env_d2._adversarial_seed(fake))
-# Different scenario_id should typically produce a different seed (hard tier range)
-different_seed_ok = env_d1._adversarial_seed(fake) != env_d1._adversarial_seed(halluc)
-report("_adversarial_seed varies by scenario_id",
-       different_seed_ok,
-       f"same_id={env_d1._adversarial_seed(fake)} diff_id={env_d1._adversarial_seed(halluc)}")
-
-# get_grader_task_name routes adv_* to random_incident
-env_adv4 = PipelineEnvironment()
-env_adv4.reset(task="clean_deploy")
-env_adv4._load_adversarial_scenario(fake)
-report("get_grader_task_name routes adv_* to random_incident",
-       env_adv4.get_grader_task_name() == "random_incident",
-       f"got={env_adv4.get_grader_task_name()}")
-# And leaves regular task_names untouched
-env_reg = PipelineEnvironment()
-env_reg.reset(task="broken_pipeline")
-report("get_grader_task_name leaves Round 1 tasks alone",
-       env_reg.get_grader_task_name() == "broken_pipeline")
-
-# test_adversarial_fallback_when_designer_returns_None — the reset() flow must
-# survive a designer that returns None by falling back to random_incident.
-# Monkey-patch the designer on an env instance BEFORE priming a plateau.
-env_fb = PipelineEnvironment()
-env_fb._designer.generate = lambda weak_spots, use_cache=True: None
-# Prime a plateau: 10 flat rewards on recent_rewards.
-for _ in range(10):
-    env_fb._curriculum.tracker.record_episode("clean_deploy", "config_error",
-                                               success=True, final_reward=0.7)
-# Trigger an autonomous reset (no DEVOPS_TASK, no explicit task).
-os.environ.pop("DEVOPS_TASK", None)
-obs_fb = env_fb.reset()
-report("test_adversarial_fallback_when_designer_returns_None: falls back to random_incident",
-       env_fb._task_name == "random_incident",
-       f"got={env_fb._task_name}")
-report("test_adversarial_fallback_when_designer_returns_None: _last_adversarial_scenario is None",
-       env_fb._last_adversarial_scenario is None)
-report("test_adversarial_fallback_when_designer_returns_None: obs returned normally",
-       obs_fb.services and len(obs_fb.services) >= 4)
-
-# And the happy path — designer succeeds → adversarial scenario loads.
-env_happy = PipelineEnvironment()
-env_happy._designer.generate = lambda weak_spots, use_cache=True: _make_fake_scenario(
-    "happy_adv",
-    [{"service": "api-gateway", "failure_type": "degraded_performance", "severity": "severe"}],
-    max_steps=8,
-)
-for _ in range(10):
-    env_happy._curriculum.tracker.record_episode("clean_deploy", "config_error",
-                                                  success=True, final_reward=0.7)
-os.environ.pop("DEVOPS_TASK", None)
-obs_happy = env_happy.reset()
-report("adversarial happy path: task_name = adv_happy_adv",
-       env_happy._task_name == "adv_happy_adv",
-       f"got={env_happy._task_name}")
-report("adversarial happy path: api-gateway is DOWN (severe)",
-       env_happy._engine.services["api-gateway"].health.value == "down")
-report("adversarial happy path: grader_task aliases to random_incident",
-       env_happy.get_grader_task_name() == "random_incident")
-
-# Round 1 regression — after all this, a plain reset with explicit task still works.
-os.environ["DEVOPS_TASK"] = "clean_deploy"
-env_regr57 = PipelineEnvironment()
-obs_regr57 = env_regr57.reset()
-_obs_step = env_regr57.step(PipelineAction(action_type=ActionType.VIEW_PIPELINE))
-report("Round 1 regression after Phase 5.7: clean_deploy still works",
-       obs_regr57.services and _obs_step.reward is not None and _obs_step.last_action_error is None)
+# Adversarial scenario wiring test block removed in Phase H — the
+# adversarial designer + _load_adversarial_scenario / _adversarial_seed
+# methods + _designer / _last_adversarial_scenario state were all cut in
+# Phases A and D (kube-sre-gym overlap / DQ risk). The curriculum's
+# "adversarial" plateau-signal is now routed by pipeline_environment.reset()
+# straight to random_incident at seed 85; that fallback is exercised
+# implicitly by the curriculum-pick-task tests in TEST 13 and the
+# environment-integration tests in TEST 16.
 
 
 # ============================================================================

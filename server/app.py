@@ -79,6 +79,29 @@ def health_check():
     return {"status": "healthy"}
 
 
+@app.get("/curriculum_progress")
+def curriculum_progress():
+    """Phase J.7 — read-only mastery snapshot from the active env's curriculum.
+
+    Returns 200 with a valid (possibly empty) JSON shape regardless of whether
+    /reset has been called yet, so polling clients (Phase M training) don't
+    need to special-case bootstrap. When no env has registered yet we return
+    empty per_task / per_failure dicts and zero counts.
+    """
+    env = getattr(app.state, "active_env", None)
+    if env is None or getattr(env, "_curriculum", None) is None:
+        return {
+            "per_task": {},
+            "per_failure": {},
+            "recent_rewards_mean": 0.0,
+            "recent_rewards_count": 0,
+            "overall_mastery": 0.0,
+            "is_plateau": False,
+            "note": "no active env / curriculum yet — call /reset first to register one",
+        }
+    return env._curriculum.dump_progress()
+
+
 @app.post("/baseline")
 async def run_baseline():
     """Return pre-recorded baseline scores. Does NOT run inference.py."""

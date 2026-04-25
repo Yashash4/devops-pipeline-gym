@@ -1,7 +1,12 @@
 """Generate a before/after PNG from two eval_baseline.py JSON outputs.
 
-Bars: avg_reward per task. Error bars: std across seeds. Side-by-side
-baseline (untrained) vs trained. Saved at --output.
+Two side-by-side subplots in one PNG:
+  Left  — avg_reward per task (higher is better). Error bars: std across seeds.
+  Right — avg_steps_to_recovery per task (lower is better; Phase J.5 metric).
+          Tasks that always start healthy (e.g. clean_deploy) report 0 with a
+          0-recovery-episode count and are dropped from the right subplot.
+
+Side-by-side baseline (untrained) vs trained. Saved at --output.
 
 Designed to be non-interactive and Agg-backend so it runs on headless CI.
 """
@@ -47,6 +52,22 @@ def _series(summary: Dict[str, Dict[str, float]]):
     return tasks, avgs, stds
 
 
+def _recovery_series(summary: Dict[str, Dict[str, float]]):
+    """Per-task avg_steps_to_recovery, dropping tasks with 0 recovery episodes
+    (i.e. tasks whose every episode started already-healthy — clean_deploy)."""
+    tasks: List[str] = []
+    avgs: List[float] = []
+    for task in CANONICAL_TASK_ORDER:
+        if task not in summary:
+            continue
+        ep_count = int(summary[task].get("recovery_episodes_count", 0))
+        if ep_count == 0:
+            continue  # task starts healthy in every seed; skip to avoid 0-bars
+        tasks.append(task)
+        avgs.append(float(summary[task].get("avg_steps_to_recovery", 0.0)))
+    return tasks, avgs
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     p = argparse.ArgumentParser(description="Before/after comparison chart")
@@ -80,14 +101,16 @@ def main():
     x = np.arange(len(tasks))
     width = 0.38
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.bar(x - width / 2, b_y, width, yerr=b_e, capsize=3,
-           label=f"baseline: {Path(baseline_json.get('model', 'base')).name or baseline_json.get('model', 'base')}",
-           color="#9aa6b2")
-    ax.bar(x + width / 2, t_y, width, yerr=t_e, capsize=3,
-           label=f"trained: {Path(trained_json.get('model', 'trained')).name or trained_json.get('model', 'trained')}",
-           color="#3a86ff")
+    base_label = f"baseline: {Path(baseline_json.get('model', 'base')).name or baseline_json.get('model', 'base')}"
+    trained_label = f"trained: {Path(trained_json.get('model', 'trained')).name or trained_json.get('model', 'trained')}"
 
+    fig, (ax, ax_rec) = plt.subplots(1, 2, figsize=(15, 5))
+
+    # ── Left subplot: avg reward per task (higher is better) ──────────────────
+    ax.bar(x - width / 2, b_y, width, yerr=b_e, capsize=3,
+           label=base_label, color="#9aa6b2")
+    ax.bar(x + width / 2, t_y, width, yerr=t_e, capsize=3,
+           label=trained_label, color="#3a86ff")
     ax.set_xticks(x)
     ax.set_xticklabels(tasks, rotation=20, ha="right")
     ax.set_ylabel("avg reward (summed over episode)")
@@ -95,6 +118,30 @@ def main():
     ax.legend(loc="best", fontsize=9)
     ax.axhline(0, color="black", linewidth=0.5)
     ax.grid(axis="y", alpha=0.3)
+
+    # ── Right subplot: steps to recovery per task (lower is better) ──────────
+    base_rec_tasks, base_rec_avgs = _recovery_series(baseline_json["summary"])
+    trained_rec_tasks, trained_rec_avgs = _recovery_series(trained_json["summary"])
+    rec_tasks = [t for t in CANONICAL_TASK_ORDER if t in base_rec_tasks or t in trained_rec_tasks]
+    base_rec_map = dict(zip(base_rec_tasks, base_rec_avgs))
+    trained_rec_map = dict(zip(trained_rec_tasks, trained_rec_avgs))
+    b_r = [base_rec_map.get(t, 0.0) for t in rec_tasks]
+    t_r = [trained_rec_map.get(t, 0.0) for t in rec_tasks]
+    xr = np.arange(len(rec_tasks))
+    if rec_tasks:
+        ax_rec.bar(xr - width / 2, b_r, width, label=base_label, color="#9aa6b2")
+        ax_rec.bar(xr + width / 2, t_r, width, label=trained_label, color="#3a86ff")
+        ax_rec.set_xticks(xr)
+        ax_rec.set_xticklabels(rec_tasks, rotation=20, ha="right")
+        ax_rec.set_ylabel("avg steps to recovery (lower is better)")
+        ax_rec.set_title("Steps to Recovery — first step where mean health ≥ 80")
+        ax_rec.legend(loc="best", fontsize=9)
+        ax_rec.grid(axis="y", alpha=0.3)
+    else:
+        ax_rec.axis("off")
+        ax_rec.text(0.5, 0.5, "No degraded-start episodes recorded\n(all tasks began healthy in this run)",
+                    ha="center", va="center", transform=ax_rec.transAxes, fontsize=10, color="#666")
+
     fig.tight_layout()
 
     out_path = Path(args.output)
