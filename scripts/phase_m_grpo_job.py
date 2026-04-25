@@ -129,7 +129,10 @@ if not health_ok:
 
 try:
     # Step 5: Run GRPO training
-    print("[5/7] Running GRPO 200 steps on A100 + vLLM (single LoRA path, full Stage B)...", flush=True)
+    print("[5/7] Running GRPO 200 steps WITHOUT vLLM (single LoRA + SFT prior)...", flush=True)
+    print("    NOTE: vLLM colocate is incompatible with our multi-step rollout —", flush=True)
+    print("    _generate_continuation_action uses model.generate() which deadlocks", flush=True)
+    print("    against vLLM's exclusive GPU lock. Non-vLLM path: ~30s/step, robust.", flush=True)
     subprocess.run(
         [
             sys.executable, "training/grpo_train.py",
@@ -143,7 +146,7 @@ try:
             "--learning-rate", "2e-6",
             "--max-completion-length", "512",
             "--output-dir", "/workspace/grpo_output",
-            "--use-vllm",
+            # No --use-vllm: model.generate path, no GPU lock contention
         ],
         check=True,
         env={
