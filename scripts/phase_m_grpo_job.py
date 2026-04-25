@@ -50,28 +50,10 @@ subprocess.run(
     check=True,
 )
 
-# Step 3: Pull SFT adapter from Hub
-print("[3/7] Pulling SFT adapter from Hub...", flush=True)
-from huggingface_hub import snapshot_download
-
-sft_path = snapshot_download(
-    "yashash045/devops-pipeline-gym-sft-adapter",
-    token=os.environ["HF_TOKEN"],
-    local_dir="/workspace/sft_adapter",
-)
-
-# Verify expected adapter file exists at <sft_path>/final
-adapter_config = os.path.join(sft_path, "final", "adapter_config.json")
-if not os.path.exists(adapter_config):
-    print(f"ERROR: adapter_config.json not found at {adapter_config}", flush=True)
-    print(f"Contents of {sft_path}:", flush=True)
-    for root, dirs, files in os.walk(sft_path):
-        for f in files[:20]:
-            print(f"  {os.path.join(root, f)}", flush=True)
-    raise FileNotFoundError(f"adapter_config.json missing at {adapter_config}")
-print(f"    [OK] Verified adapter_config.json exists", flush=True)
-print(f"    SFT adapter root: {sft_path}", flush=True)
-print(f"    SFT adapter resolved: {sft_path}/final (adapter_config.json + adapter_model.safetensors)", flush=True)
+# Step 3: SKIPPED — Option 3 trains GRPO from raw base on a single LoRA
+# (no SFT adapter). Stacked LoRA + Unsloth vLLM = AttributeError on
+# load_lora (proven yesterday). Single LoRA + vLLM = works.
+print("[3/7] Skipping SFT adapter pull (Option 3: raw base + single LoRA + vLLM)", flush=True)
 
 # Step 4: Boot env-server in background
 print("[4/7] Booting env-server on localhost:8000...", flush=True)
@@ -146,25 +128,27 @@ if not health_ok:
 
 try:
     # Step 5: Run GRPO training
-    print("[5/7] Running GRPO 200 steps (Stage B production run; Qwen3-1.7B + SFT adapter)...", flush=True)
+    print("[5/7] Running GRPO 100 steps from raw base + vLLM (single LoRA path)...", flush=True)
     subprocess.run(
         [
             sys.executable, "training/grpo_train.py",
             "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
-            "--sft-adapter-path", f"{sft_path}/final",
+            "--sft-adapter-path", "none",
             "--env-url", "http://localhost:8000",
-            "--max-steps", "200",
+            "--max-steps", "100",
             "--batch-size", "4",
             "--num-generations", "8",
             "--learning-rate", "5e-6",
             "--max-completion-length", "512",
             "--output-dir", "/workspace/grpo_output",
+            "--use-vllm",
         ],
         check=True,
         env={
             **os.environ,
             "TRACKIO_SPACE_ID": "yashash045/dpg-trackio",
             "TRACKIO_PROJECT": "devops-pipeline-gym-grpo",
+            "VLLM_ENFORCE_EAGER": "1",
         },
     )
 finally:

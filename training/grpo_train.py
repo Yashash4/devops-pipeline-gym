@@ -490,12 +490,26 @@ def main():
         logger.info("TRL experimental.openenv NOT available; using Option B (closure-based multi-step)")
 
     logger.info("Loading base model: %s", args.model)
-    model, tokenizer = FastLanguageModel.from_pretrained(
+    fpt_kwargs = dict(
         model_name=args.model,
         max_seq_length=2048,
         dtype=None,
         load_in_4bit=True,
     )
+    if args.use_vllm:
+        # Unsloth vLLM colocate path. fast_inference flips the model into a
+        # vLLM-served generation backend; max_lora_rank must match the GRPO
+        # LoRA rank (16); gpu_memory_utilization leaves headroom on L4 (24GB).
+        # enforce_eager bypasses torch.compile, sidestepping the v0.19 graph
+        # bug seen on Qwen3 (size_N nodes still have users at decompose-time).
+        fpt_kwargs.update(
+            fast_inference=True,
+            max_lora_rank=16,
+            gpu_memory_utilization=0.6,
+            enforce_eager=True,
+        )
+        logger.info("vLLM colocate enabled (fast_inference=True, max_lora_rank=16, gpu_mem=0.6, enforce_eager=True)")
+    model, tokenizer = FastLanguageModel.from_pretrained(**fpt_kwargs)
 
     # Phase 6.5 hotfix — load the SFT adapter as a FROZEN named prior and
     # let GRPO stack a new trainable adapter on top. Do NOT merge.
@@ -512,7 +526,7 @@ def main():
     # Stacking via named adapters sidesteps the quantisation round-trip:
     #   - "sft_warmup"   — frozen, applied during forward pass (the prior)
     #   - "default"      — trainable, GRPO gradients flow here (the new LoRA)
-    if args.sft_adapter_path:
+    if args.sft_adapter_path and args.sft_adapter_path.lower() != "none":
         from peft import PeftModel
         logger.info(
             "Loading SFT adapter as frozen prior: %s", args.sft_adapter_path
@@ -531,6 +545,11 @@ def main():
         logger.info(
             "SFT adapter loaded as 'sft_warmup' (frozen prior). "
             "GRPO LoRA will stack on top."
+        )
+    else:
+        logger.info(
+            "No SFT adapter — training GRPO from raw base "
+            "(vLLM-compatible single LoRA path)"
         )
 
     try:
@@ -628,13 +647,20 @@ def main():
         push_to_hub=False,
         report_to=["trackio"],
     )
-    # Newer TRL versions support loss_type + mask_truncated_completions.
-    # Pass them best-effort; GRPOConfig raises TypeError on unknown kwargs.
-    for extra_key, extra_val in (
+    # Newer TRL versions support loss_type + mask_truncated_completions +
+    # vLLM colocate plumbing. Pass best-effort; GRPOConfig raises TypeError
+    # on unknown kwargs.
+    extras = [
         ("loss_type", "dapo"),
         ("mask_truncated_completions", True),
         ("use_vllm", bool(args.use_vllm)),
-    ):
+    ]
+    if args.use_vllm:
+        # In-process vLLM (no external server). Memory fraction must align
+        # with FastLanguageModel.from_pretrained gpu_memory_utilization above.
+        extras.append(("vllm_mode", "colocate"))
+        extras.append(("vllm_gpu_memory_utilization", 0.6))
+    for extra_key, extra_val in extras:
         try:
             _probe = GRPOConfig(**{**cfg_kwargs, extra_key: extra_val})
             cfg_kwargs[extra_key] = extra_val
