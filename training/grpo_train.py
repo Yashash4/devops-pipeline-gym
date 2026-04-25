@@ -500,12 +500,17 @@ def main():
         # into a vLLM-served generation backend; max_lora_rank must match the
         # GRPO LoRA rank below (16); gpu_memory_utilization leaves headroom
         # for the trainer's optimizer + gradients on a 24GB L4.
+        # enforce_eager=True bypasses torch.compile, sidestepping the
+        # vLLM v0.19 graph-erase bug on Qwen3 (size_N nodes still have
+        # users at decompose-time). Loses ~30% of vLLM's speedup but the
+        # batched generation still wins ~2x over non-vLLM.
         fpt_kwargs.update(
             fast_inference=True,
             max_lora_rank=16,
             gpu_memory_utilization=0.6,
+            enforce_eager=True,
         )
-        logger.info("vLLM colocate enabled (fast_inference=True, max_lora_rank=16, gpu_mem=0.6)")
+        logger.info("vLLM colocate enabled (fast_inference=True, max_lora_rank=16, gpu_mem=0.6, enforce_eager=True)")
     model, tokenizer = FastLanguageModel.from_pretrained(**fpt_kwargs)
 
     # Phase 6.5 hotfix — load the SFT adapter as a FROZEN named prior and

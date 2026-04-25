@@ -3,7 +3,7 @@
 # dependencies = [
 #     "torch>=2.4",
 #     "unsloth",
-#     "vllm==0.6.3",
+#     "vllm>=0.6.0",
 #     "trl>=0.12",
 #     "peft>=0.13",
 #     "datasets>=3.0",
@@ -167,6 +167,7 @@ try:
                 **os.environ,
                 "TRACKIO_SPACE_ID": "yashash045/dpg-trackio",
                 "TRACKIO_PROJECT": "devops-pipeline-gym-grpo",
+                "VLLM_ENFORCE_EAGER": "1",
             },
         )
     except subprocess.CalledProcessError as e:
