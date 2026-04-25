@@ -6,9 +6,7 @@
 
 """Outcome-based reward calculator for the DevOps Pipeline Environment."""
 
-from typing import Iterable
-
-from devops_pipeline_gym.models import ActionType, ROLE_ACTIONS, Role
+from devops_pipeline_gym.models import ActionType, Role
 
 
 # Task urgency multipliers — harder tasks get steeper reward gradients
@@ -108,16 +106,14 @@ def calculate_reward(prev_snapshot, current_snapshot, action, viewed_actions,
 
 # ─── Round 2 additions ─────────────────────────────────────────────────────
 #
-# Three independent signals added on top of the Round 1 base reward.
-# Each returns a DELTA; pipeline_environment.step() sums them and applies
-# the per-step bound [-0.40, +0.45].
+# Single signal added on top of the Round 1 base reward (handoff_quality
+# and role_specialization were cut for kube-sre-gym overlap risk).
+# Returns a DELTA; pipeline_environment.step() sums it onto the Round 1
+# base and applies the per-step bound [-0.40, +0.32].
 #
-# Gaming-resistance: handoff bonus is capped at +0.08 cumulative per episode
-# (caller tracks), specialisation bonus requires 2+ unique roles (no self-
-# play reward), role_alignment is only applied when role is explicitly set.
-
-# Round 2 — per-episode hard cap on accumulated coordination bonus.
-COORDINATION_BONUS_EPISODE_CAP = 0.08
+# Gaming-resistance: role_alignment is only applied when role is explicitly
+# set on the action (model_fields_set check in env.step), so default-role
+# Round 1 actions are not penalised.
 
 
 def role_alignment_reward(action, router) -> float:
@@ -133,57 +129,12 @@ def role_alignment_reward(action, router) -> float:
     return -0.05
 
 
-def handoff_quality_reward(tracker, previous_role: Role, current_role: Role,
-                           coordination_accumulated: float) -> tuple[float, float]:
-    """Return (delta, new_accumulated). Reads the most-recent scored handoff.
-
-    Applies 0.02 × quality_score for the transition, capped so that
-    `coordination_accumulated + delta <= COORDINATION_BONUS_EPISODE_CAP`.
-    Returns 0 delta and unchanged accumulated when:
-      - previous_role == current_role (no transition)
-      - tracker has no handoffs (notes were empty/absent)
-      - the cap has already been hit
-    """
-    if previous_role == current_role:
-        return 0.0, coordination_accumulated
-    if not tracker.handoffs:
-        return 0.0, coordination_accumulated
-    recent = tracker.handoffs[-1]
-    # Only count the most-recent handoff if it corresponds to THIS transition.
-    if recent.from_role != previous_role or recent.to_role != current_role:
-        return 0.0, coordination_accumulated
-
-    raw = 0.02 * recent.quality_score
-    headroom = COORDINATION_BONUS_EPISODE_CAP - coordination_accumulated
-    if headroom <= 0:
-        return 0.0, coordination_accumulated
-    delta = min(raw, headroom)
-    return delta, coordination_accumulated + delta
-
-
-def role_specialization_bonus(episode_roles: Iterable) -> float:
-    """End-of-episode bonus based on unique roles used.
-
-    +0.10 when all 3 modes used, +0.03 when 2, else 0.0. Called only on
-    done=True. Cannot be gamed without actually issuing actions in each
-    mode (the env validates role on each step).
-    """
-    unique = {getattr(r, "value", r) for r in episode_roles}
-    if len(unique) >= 3:
-        return 0.10
-    if len(unique) == 2:
-        return 0.03
-    return 0.0
-
-
 # Final per-step reward bounds after combining Round 1 + Round 2 additions.
 # Round 1 base bounds to [-0.35, +0.30]. Round 2 additions on a good step:
-#   +0.02 (alignment) + 0.02 (handoff, capped) = +0.04  → peak step: +0.34
-#   plus end-of-episode +0.10 spec bonus on done: +0.44 → bound to +0.45.
-# Worst case: Round 1 -0.35 + -0.15 (role mismatch returned directly, no base)
-# isn't reached here — role mismatch short-circuits. Normal negative: -0.35.
+#   +0.02 (role alignment only) → peak step: +0.32
+# Worst case: Round 1 -0.35; role mismatch short-circuits before reaching here.
 STEP_REWARD_MIN = -0.40
-STEP_REWARD_MAX = 0.45
+STEP_REWARD_MAX = 0.32
 
 
 def bound_step_reward(reward: float) -> float:
