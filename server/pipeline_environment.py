@@ -22,16 +22,12 @@ from devops_pipeline_gym.models import (
     ServiceHealth,
     ServiceStatus,
 )
-from server.adversarial_designer import AdversarialDesigner
 from server.curriculum import CurriculumController
-from server.handoff_metrics import HandoffTracker
 from server.pipeline_engine import PipelineEngine
 from server.rewards import (
     bound_step_reward,
     calculate_reward,
-    handoff_quality_reward,
     role_alignment_reward,
-    role_specialization_bonus,
 )
 from server.roles import RoleRouter
 from server.scenarios import load_scenario
@@ -67,11 +63,6 @@ _TASK_FAILURE_TYPE = {
     "random_incident": None,  # varies per seed; curriculum treats as generic
 }
 
-# Maximum episode length we allow for LLM-generated adversarial scenarios —
-# prevents a runaway designer from claiming a 50-step episode.
-_ADVERSARIAL_MAX_STEPS_CAP = 20
-
-
 # Goal suffixes that hint at investigation without giving away answers
 _INVESTIGATION_HINTS = {
     "clean_deploy": " Use view_logs and view_config to inspect services before deploying.",
@@ -97,19 +88,13 @@ class PipelineEnvironment(Environment):
         self._viewed_actions = set()
         self._last_action_key = None
         self._investigated_services = set()  # e.g. "logs:api-gateway", "config:cache-service"
-        # Round 2 — role system + curriculum + adversarial designer + hand-off scoring.
-        # All are lazy / graceful: AdversarialDesigner tolerates a missing
-        # OLLAMA_API_KEY by returning None from generate(), callers fall back.
+        # Round 2 — role system + curriculum (slim layer post-cleanup).
         self._role_router = RoleRouter()
         self._curriculum = CurriculumController()
-        self._designer = AdversarialDesigner()
-        self._handoff_tracker = HandoffTracker()
         self._current_role: Role = Role.SRE
         self._episode_roles: list = []               # one Role entry per executed step
         self._role_history: list = []                # list[RoleHistoryEntry] for observations
-        self._previous_handoff: str | None = None    # notes from the last action w/ handoff
-        self._current_task: str = "clean_deploy"     # last task selected (incl. "adversarial")
-        self._coordination_bonus_accumulated: float = 0.0
+        self._current_task: str = "clean_deploy"     # last task selected
 
     def reset(self, seed=None, episode_id=None, **kwargs) -> PipelineObservation:
         """Initialize a new episode.
@@ -121,65 +106,47 @@ class PipelineEnvironment(Environment):
         """
         explicit_task = kwargs.get("task") or os.environ.get("DEVOPS_TASK")
         chosen_seed = None
-        adversarial_gen = None   # set only when designer returns a scenario
         if explicit_task:
             self._task_name = explicit_task
         else:
-            # Round 2 — let the curriculum pick based on mastery/plateau signal.
+            # Round 2 — curriculum picks task based on per-task / per-failure mastery.
+            # If the curriculum returns "adversarial" (its plateau signal),
+            # we route to random_incident at a hard-tier seed instead — the
+            # adversarial-designer path was cut for kube-sre-gym overlap.
             picked_task, seed_hint = self._curriculum.pick_task()
             if picked_task == "adversarial":
-                # Plateau signal. Try the designer; on a valid GeneratedScenario
-                # we LOAD it into the engine (Phase 5.7 wiring). On None we
-                # fall through to random_incident at a hard-tier seed.
-                weak_spots = self._curriculum.get_weak_failure_types()
-                adversarial_gen = self._designer.generate(weak_spots) if weak_spots else None
-                if adversarial_gen is None:
-                    self._task_name = "random_incident"
-                    chosen_seed = 85
-                # else: _load_adversarial_scenario() sets task_name + seed below.
+                self._task_name = "random_incident"
+                chosen_seed = 85  # hard-tier seed for plateau breaking
             else:
                 self._task_name = picked_task
                 chosen_seed = seed_hint
 
         # Canonical seed — explicit / fallback / curriculum-supplied.
-        # Adversarial path derives its own seed inside _load_adversarial_scenario.
-        if adversarial_gen is None:
-            if chosen_seed is None:
-                chosen_seed = TASK_SEEDS.get(self._task_name, 9999)
-            # random_incident honours DEVOPS_SEED for backward compat with Round 1 tests.
-            if self._task_name == "random_incident":
-                chosen_seed = int(os.environ.get("DEVOPS_SEED", str(chosen_seed)))
+        if chosen_seed is None:
+            chosen_seed = TASK_SEEDS.get(self._task_name, 9999)
+        # random_incident honours DEVOPS_SEED for backward compat with Round 1 tests.
+        if self._task_name == "random_incident":
+            chosen_seed = int(os.environ.get("DEVOPS_SEED", str(chosen_seed)))
 
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._episode_history = []
         self._viewed_actions = set()
         self._last_action_key = None
         self._investigated_services = set()
-        # Round 2 per-episode reset. Curriculum + designer persist across
-        # episodes (they learn / cache); router + handoff tracker are
-        # per-episode state.
+        # Round 2 per-episode reset. Curriculum persists across episodes
+        # (it accumulates mastery); router is per-episode state.
         self._role_router = RoleRouter()
-        self._handoff_tracker = HandoffTracker()
         self._episode_roles = []
         self._role_history = []
-        self._previous_handoff = None
-        self._coordination_bonus_accumulated = 0.0
         self._current_role = Role.SRE  # default before next_role() below
-        self._last_adversarial_scenario = None
         self._current_task = self._task_name
 
         if PipelineEnvironment._register_callback:
             PipelineEnvironment._register_callback(self)
 
-        if adversarial_gen is not None:
-            # Phase 5.7 — LLM-generated scenario drives the episode.
-            # _load_adversarial_scenario sets self._engine, self._task_name,
-            # self._max_steps, and self._last_adversarial_scenario.
-            self._load_adversarial_scenario(adversarial_gen)
-        else:
-            scenario = load_scenario(self._task_name, chosen_seed)
-            self._engine = PipelineEngine(scenario, chosen_seed)
-            self._max_steps = TASK_MAX_STEPS.get(self._task_name, 15)
+        scenario = load_scenario(self._task_name, chosen_seed)
+        self._engine = PipelineEngine(scenario, chosen_seed)
+        self._max_steps = TASK_MAX_STEPS.get(self._task_name, 15)
 
         # First-pass observation to feed next_role(); then update and rebuild
         # so the returned obs carries the correct current_role.
@@ -287,9 +254,7 @@ class PipelineEnvironment(Environment):
             if svc:
                 config_snapshot = svc.get_config_snapshot()
 
-        # ─── Round 2 — role routing + hand-off scoring + reward additions ──
-        # Score hand-off FIRST (before current_role is advanced) so the
-        # transition pair lines up with tracker.handoffs[-1].
+        # ─── Round 2 — role routing + role-alignment reward ───────────────
         interim_obs = self._build_observation(
             last_action_result=result_text,
             last_action_error=None,
@@ -299,34 +264,12 @@ class PipelineEnvironment(Environment):
         )
         next_role = self._role_router.next_role(interim_obs)
 
-        if action.handoff_notes and next_role != action.role:
-            self._handoff_tracker.score_handoff(
-                from_role=action.role,
-                to_role=next_role,
-                notes=action.handoff_notes,
-                last_action=action,
-                current_services=self._engine.get_service_statuses(),
-            )
-
-        # Round 2 reward deltas — additive on top of Round 1 base.
+        # Round 2 reward delta — only role alignment now (handoff + spec bonus cut).
         round2_delta = 0.0
         if role_was_explicit:
             round2_delta += role_alignment_reward(action, self._role_router)
-        handoff_delta, self._coordination_bonus_accumulated = handoff_quality_reward(
-            self._handoff_tracker,
-            action.role,
-            next_role,
-            self._coordination_bonus_accumulated,
-        )
-        round2_delta += handoff_delta
-        if done:
-            # Include THIS action's role when computing specialisation since
-            # self._episode_roles is appended below (after reward combination).
-            round2_delta += role_specialization_bonus(
-                self._episode_roles + [action.role]
-            )
 
-        # Final bounded reward for this step (Round 1 + Round 2 deltas).
+        # Final bounded reward for this step (Round 1 + Round 2 delta).
         reward = bound_step_reward(round1_reward + round2_delta)
 
         # Phase 6.5 — episode-terminal bonus/penalty. Widens the episode
@@ -378,7 +321,6 @@ class PipelineEnvironment(Environment):
             role=action.role,
             action_type=action.action_type,
         ))
-        self._previous_handoff = action.handoff_notes
         self._current_role = next_role
 
         # ── Curriculum tracking — record the episode on the last step. ────
@@ -429,74 +371,6 @@ class PipelineEnvironment(Environment):
         if self._task_name and self._task_name.startswith("adv_"):
             return "random_incident"
         return self._task_name
-
-    def _adversarial_seed(self, gen) -> int:
-        """Deterministic hard-tier seed derived from the scenario_id.
-
-        CLAUDE.md forbids Python's hash() for seeding (randomised per process);
-        use a character-sum checksum so runs across processes pick the same
-        seed for the same scenario_id. Hard-tier base = 60.
-        """
-        sid = getattr(gen, "scenario_id", "") or ""
-        checksum = sum(ord(c) for c in sid) % 40
-        return 60 + checksum
-
-    def _load_adversarial_scenario(self, gen) -> list:
-        """Bootstrap the engine from a GeneratedScenario.
-
-        Strategy — no Round 1 file edits:
-          1. Use `random_incident` as the structural base (initialises all
-             5 services + deps + baseline metrics via its public setup()).
-          2. Overlay the adversarial `initial_failures` by mutating
-             ServiceState attributes directly (all public, no underscore).
-          3. Stamp task_name `adv_<scenario_id>` so logs + the grader
-             redirect (via get_grader_task_name) are observable.
-
-        Returns the list of service names that actually received a failure
-        overlay (filtered against the engine's real 5-service roster so
-        any hallucinated name is dropped, not crashed on).
-        """
-        seed = self._adversarial_seed(gen)
-
-        # Build the base engine (public API only).
-        base = load_scenario("random_incident", seed)
-        self._engine = PipelineEngine(base, seed)
-
-        valid_services = set(self._engine.get_service_names())
-        failures_applied = []
-        for failure in (gen.initial_failures or []):
-            if not isinstance(failure, dict):
-                continue
-            svc_name = failure.get("service")
-            if svc_name not in valid_services:
-                # Defensive — designer hallucination; drop rather than crash.
-                continue
-            svc = self._engine.services.get(svc_name)
-            if svc is None:
-                continue
-            severity = str(failure.get("severity", "moderate")).lower()
-            if severity == "severe":
-                svc.health = ServiceHealth.DOWN
-                svc.latency_ms = 2000.0
-                svc.error_rate = 25.0
-                svc.cpu_percent = max(svc.cpu_percent, 90.0)
-            else:  # moderate (default) or unknown
-                svc.health = ServiceHealth.DEGRADED
-                svc.latency_ms = 500.0
-                svc.error_rate = 8.0
-                svc.cpu_percent = max(svc.cpu_percent, 75.0)
-            failures_applied.append(svc_name)
-
-        # Avoid double prefix when designer's scenario_id already starts with adv_
-        sid = gen.scenario_id or "unknown"
-        self._task_name = sid if sid.startswith("adv_") else f"adv_{sid}"
-        self._current_task = self._task_name
-        self._max_steps = min(
-            int(getattr(gen, "max_steps", _ADVERSARIAL_MAX_STEPS_CAP) or _ADVERSARIAL_MAX_STEPS_CAP),
-            _ADVERSARIAL_MAX_STEPS_CAP,
-        )
-        self._last_adversarial_scenario = gen
-        return failures_applied
 
     def _build_observation(self, last_action_result, last_action_error,
                            done, reward, config_snapshot=None):
@@ -612,7 +486,6 @@ class PipelineEnvironment(Environment):
             # Round 2 fields — all backed by self state maintained in step()/reset().
             current_role=self._current_role,
             role_history=list(self._role_history),
-            previous_handoff=self._previous_handoff,
         )
 
     def _get_available_actions(self):
