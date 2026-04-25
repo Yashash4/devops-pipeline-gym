@@ -489,29 +489,12 @@ def main():
         logger.info("TRL experimental.openenv NOT available; using Option B (closure-based multi-step)")
 
     logger.info("Loading base model: %s", args.model)
-    fpt_kwargs = dict(
+    model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model,
         max_seq_length=2048,
         dtype=None,
         load_in_4bit=True,
     )
-    if args.use_vllm:
-        # Unsloth's vLLM colocate path. fast_inference=True flips the model
-        # into a vLLM-served generation backend; max_lora_rank must match the
-        # GRPO LoRA rank below (16); gpu_memory_utilization leaves headroom
-        # for the trainer's optimizer + gradients on a 24GB L4.
-        # enforce_eager=True bypasses torch.compile, sidestepping the
-        # vLLM v0.19 graph-erase bug on Qwen3 (size_N nodes still have
-        # users at decompose-time). Loses ~30% of vLLM's speedup but the
-        # batched generation still wins ~2x over non-vLLM.
-        fpt_kwargs.update(
-            fast_inference=True,
-            max_lora_rank=16,
-            gpu_memory_utilization=0.6,
-            enforce_eager=True,
-        )
-        logger.info("vLLM colocate enabled (fast_inference=True, max_lora_rank=16, gpu_mem=0.6, enforce_eager=True)")
-    model, tokenizer = FastLanguageModel.from_pretrained(**fpt_kwargs)
 
     # Phase 6.5 hotfix — load the SFT adapter as a FROZEN named prior and
     # let GRPO stack a new trainable adapter on top. Do NOT merge.
@@ -644,21 +627,13 @@ def main():
         push_to_hub=False,
         report_to=["trackio"],
     )
-    # Newer TRL versions support loss_type + mask_truncated_completions +
-    # vLLM colocate plumbing. Pass best-effort; GRPOConfig raises TypeError
-    # on unknown kwargs.
-    extras = [
+    # Newer TRL versions support loss_type + mask_truncated_completions.
+    # Pass them best-effort; GRPOConfig raises TypeError on unknown kwargs.
+    for extra_key, extra_val in (
         ("loss_type", "dapo"),
         ("mask_truncated_completions", True),
         ("use_vllm", bool(args.use_vllm)),
-    ]
-    if args.use_vllm:
-        # In-process vLLM (no external server). Memory-fraction must align
-        # with the FastLanguageModel.from_pretrained gpu_memory_utilization
-        # passed above.
-        extras.append(("vllm_mode", "colocate"))
-        extras.append(("vllm_gpu_memory_utilization", 0.6))
-    for extra_key, extra_val in extras:
+    ):
         try:
             _probe = GRPOConfig(**{**cfg_kwargs, extra_key: extra_val})
             cfg_kwargs[extra_key] = extra_val

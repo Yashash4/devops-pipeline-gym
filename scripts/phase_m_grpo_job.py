@@ -3,9 +3,8 @@
 # dependencies = [
 #     "torch>=2.4",
 #     "unsloth",
-#     "vllm>=0.6.0",
 #     "trl>=0.12",
-#     "peft>=0.18.0,<0.19",
+#     "peft>=0.13",
 #     "datasets>=3.0",
 #     "bitsandbytes>=0.43",
 #     "huggingface_hub>=0.30",
@@ -146,35 +145,27 @@ if not health_ok:
     raise RuntimeError(f"env-server failed to come up in 105s")
 
 try:
-    # Step 5: Run GRPO training (vLLM-accelerated)
-    print("[5/7] Running GRPO 100 steps (Stage A test run; Qwen3-1.7B + SFT adapter + vLLM)...", flush=True)
-    try:
-        subprocess.run(
-            [
-                sys.executable, "training/grpo_train.py",
-                "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
-                "--sft-adapter-path", f"{sft_path}/final",
-                "--env-url", "http://localhost:8000",
-                "--max-steps", "100",
-                "--batch-size", "4",
-                "--num-generations", "8",
-                "--learning-rate", "5e-6",
-                "--output-dir", "/workspace/grpo_output",
-            ],
-            check=True,
-            env={
-                **os.environ,
-                "TRACKIO_SPACE_ID": "yashash045/dpg-trackio",
-                "TRACKIO_PROJECT": "devops-pipeline-gym-grpo",
-                "VLLM_ENFORCE_EAGER": "1",
-            },
-        )
-    except subprocess.CalledProcessError as e:
-        print(f"    GRPO training FAILED with exit code {e.returncode}", flush=True)
-        print(f"    vLLM may have failed to initialize (Unsloth + LoRA + vLLM colocate is", flush=True)
-        print(f"    a known-finicky combo on L4). To fall back to default generation,", flush=True)
-        print(f"    remove the '--use-vllm' arg from scripts/phase_m_grpo_job.py and relaunch.", flush=True)
-        raise
+    # Step 5: Run GRPO training
+    print("[5/7] Running GRPO 100 steps (Stage A test run; Qwen3-1.7B + SFT adapter)...", flush=True)
+    subprocess.run(
+        [
+            sys.executable, "training/grpo_train.py",
+            "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
+            "--sft-adapter-path", f"{sft_path}/final",
+            "--env-url", "http://localhost:8000",
+            "--max-steps", "100",
+            "--batch-size", "4",
+            "--num-generations", "8",
+            "--learning-rate", "5e-6",
+            "--output-dir", "/workspace/grpo_output",
+        ],
+        check=True,
+        env={
+            **os.environ,
+            "TRACKIO_SPACE_ID": "yashash045/dpg-trackio",
+            "TRACKIO_PROJECT": "devops-pipeline-gym-grpo",
+        },
+    )
 finally:
     # Step 6: Stop env-server
     print("[6/7] Stopping env-server...", flush=True)
