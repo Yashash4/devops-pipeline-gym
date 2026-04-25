@@ -183,6 +183,18 @@ def parse_completion(text: str) -> Dict[str, Any]:
         data = json.loads(text[first : last + 1])
         if not isinstance(data, dict) or "action_type" not in data:
             return fallback
+        # Coerce config_edits dict -> list (model occasionally drops list wrapping).
+        # SFT data is 60/60 list-typed; pruning the in-prompt schema cue
+        # (commit c6c5f7f) caused some generations to emit a bare {"key", "value"}
+        # dict instead of [{"key", "value"}]. Pydantic's List[ConfigEdit] rejects
+        # non-list. This coercion preserves the model's underlying intent
+        # (the chosen key/value) so the gradient still rewards the right decision.
+        ce = data.get("config_edits")
+        if isinstance(ce, dict) and {"key", "value"} <= set(ce.keys()):
+            data["config_edits"] = [ce]
+        elif isinstance(ce, dict) and len(ce) == 1:
+            k, v = next(iter(ce.items()))
+            data["config_edits"] = [{"key": k, "value": str(v)}]
         # Normalise enum-valued fields to lowercase. Kaggle dry-run showed the
         # base model likes to emit "role": "SRE" / "DEV" / "OPS" (uppercase),
         # which Pydantic rejects — the Role enum values are lowercase ("sre",

@@ -146,14 +146,14 @@ if not health_ok:
 
 try:
     # Step 5: Run GRPO training
-    print("[5/7] Running GRPO 100 steps (Stage A test run; Qwen3-1.7B + SFT adapter)...", flush=True)
+    print("[5/7] Running GRPO 200 steps (Stage B production run; Qwen3-1.7B + SFT adapter)...", flush=True)
     subprocess.run(
         [
             sys.executable, "training/grpo_train.py",
             "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
             "--sft-adapter-path", f"{sft_path}/final",
             "--env-url", "http://localhost:8000",
-            "--max-steps", "100",
+            "--max-steps", "200",
             "--batch-size", "4",
             "--num-generations", "8",
             "--learning-rate", "5e-6",
