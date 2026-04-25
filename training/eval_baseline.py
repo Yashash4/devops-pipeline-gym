@@ -169,6 +169,60 @@ def _load_env_file(path: Path) -> None:
         os.environ.setdefault(k.strip(), v.strip())
 
 
+# ─── Phase J.5 — Time-to-Recovery metric ─────────────────────────────────────
+
+# Round 1 ServiceHealth enum is string-valued; map to 0..100 numerics so we
+# can compute a mean "system_health" client-side without poking the engine.
+_HEALTH_TO_NUMERIC = {
+    "healthy": 100.0,
+    "degraded": 40.0,
+    "down": 0.0,
+    "unknown": 0.0,
+}
+
+# Recovery threshold: mean service health must reach this for the episode to
+# count as "recovered." 80 is the standard production-healthy SLO line used
+# elsewhere in the env (final_health >= 50 is the looser client-side success
+# heuristic; 80 is the stricter Phase J.5 recovery bar for storytelling).
+_RECOVERY_THRESHOLD = 80.0
+
+
+def _extract_system_health(obs) -> float:
+    """Mean of per-service numeric health in [0, 100].
+
+    Works for both the Pydantic PipelineObservation (with `services` as a
+    list of ServiceStatus models, each with a `health` enum attr) and a
+    plain dict produced by `obs.model_dump()`.
+    """
+    services = obs.services if hasattr(obs, "services") else obs.get("services", [])
+    if not services:
+        return 0.0
+    healths: List[float] = []
+    for s in services:
+        h = s.health if hasattr(s, "health") else s.get("health")
+        h_str = h.value if hasattr(h, "value") else (str(h).lower() if h is not None else "unknown")
+        healths.append(_HEALTH_TO_NUMERIC.get(h_str, 0.0))
+    return sum(healths) / len(healths) if healths else 0.0
+
+
+def _compute_steps_to_recovery(initial_health: float,
+                               health_per_step: List[float],
+                               max_steps: int) -> int:
+    """First step where system_health crosses _RECOVERY_THRESHOLD, or
+    max_steps+1 if it never does.
+
+    Returns 0 when initial_health is already at/above the threshold (e.g.
+    `clean_deploy` starts healthy) — the per-task aggregator excludes
+    those episodes from the average so they don't dilute the metric.
+    """
+    if initial_health >= _RECOVERY_THRESHOLD:
+        return 0
+    for i, h in enumerate(health_per_step, start=1):
+        if h >= _RECOVERY_THRESHOLD:
+            return i
+    return max_steps + 1
+
+
 # ─── Per-episode evaluation ──────────────────────────────────────────────────
 
 def run_episode(client, model_adapter, task: str, seed_offset: int) -> Dict[str, Any]:
@@ -185,6 +239,8 @@ def run_episode(client, model_adapter, task: str, seed_offset: int) -> Dict[str,
     done = False
     steps = 0
     broke_healthy = False
+    initial_health = _extract_system_health(obs)
+    health_per_step: List[float] = []
     for steps in range(1, MAX_STEPS_PER_EPISODE + 1):
         obs_dict = obs.model_dump() if hasattr(obs, "model_dump") else obs
         role = obs_dict.get("current_role", "sre")
@@ -202,9 +258,14 @@ def run_episode(client, model_adapter, task: str, seed_offset: int) -> Dict[str,
         r = float(result.reward or 0.0)
         rewards.append(r)
         reward_sum += r
+        health_per_step.append(_extract_system_health(obs))
         if result.done:
             done = True
             break
+
+    steps_to_recovery = _compute_steps_to_recovery(
+        initial_health, health_per_step, MAX_STEPS_PER_EPISODE
+    )
 
     # Success heuristic — from the last observation, count services still
     # healthy. pipeline_environment records success = final_health >= 50 and
@@ -234,6 +295,8 @@ def run_episode(client, model_adapter, task: str, seed_offset: int) -> Dict[str,
         "done": done,
         "success": success,
         "healthy_ratio": round(healthy_ratio, 3),
+        "steps_to_recovery": steps_to_recovery,
+        "initial_health": round(initial_health, 1),
     }
 
 
@@ -250,6 +313,18 @@ def summarize(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         roles = [v["num_roles_used"] for v in runs.values()]
         successes = [1 if v.get("success") else 0 for v in runs.values()]
         all3 = [1 if v.get("all_3_modes_used") else 0 for v in runs.values()]
+
+        # Phase J.5 — steps_to_recovery, averaged over episodes that started
+        # in a degraded state (initial_health < threshold). Already-healthy
+        # starts (e.g. clean_deploy) are excluded so they don't dilute the
+        # metric with a sea of zeros — they get reported as
+        # `recovery_episodes_count: 0` instead.
+        recovery_eps = [
+            v for v in runs.values()
+            if v.get("initial_health", 100.0) < _RECOVERY_THRESHOLD
+        ]
+        recovery_steps = [v.get("steps_to_recovery", 0) for v in recovery_eps]
+
         summary[task] = {
             "avg_reward": round(statistics.mean(rewards), 4) if rewards else 0.0,
             "std_reward": round(statistics.pstdev(rewards), 4) if len(rewards) > 1 else 0.0,
@@ -257,6 +332,10 @@ def summarize(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
             "avg_roles_used": round(statistics.mean(roles), 2) if roles else 0.0,
             "success_rate": round(statistics.mean(successes), 3) if successes else 0.0,
             "all_3_modes_hit_rate": round(statistics.mean(all3), 3) if all3 else 0.0,
+            "avg_steps_to_recovery": (
+                round(statistics.mean(recovery_steps), 2) if recovery_steps else 0.0
+            ),
+            "recovery_episodes_count": len(recovery_eps),
             "n": len(runs),
         }
     return summary
@@ -315,6 +394,8 @@ def main():
                         "all_3_modes_used": False,
                         "done": False,
                         "success": False, "healthy_ratio": 0.0,
+                        "steps_to_recovery": MAX_STEPS_PER_EPISODE + 1,
+                        "initial_health": 0.0,
                         "error": f"{type(e).__name__}: {e}",
                     }
                 all_results.append(rec)
