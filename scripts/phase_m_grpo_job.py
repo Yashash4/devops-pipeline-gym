@@ -46,7 +46,7 @@ os.chdir(WORKDIR)
 # Step 2: Install package (UV envs don't ship pip — use UV's resolver)
 print("[2/7] Installing devops-pipeline-gym package...", flush=True)
 subprocess.run(
-    ["uv", "pip", "install", "--system", "-e", ".", "--quiet"],
+    ["uv", "pip", "install", "-e", ".", "--quiet"],
     check=True,
 )
 
