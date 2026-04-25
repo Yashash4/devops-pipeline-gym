@@ -160,7 +160,6 @@ try:
                 "--num-generations", "8",
                 "--learning-rate", "5e-6",
                 "--output-dir", "/workspace/grpo_output",
-                "--use-vllm",
             ],
             check=True,
             env={
