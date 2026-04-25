@@ -625,6 +625,7 @@ def main():
         max_steps=args.max_steps,
         beta=0.01,
         push_to_hub=False,
+        report_to=["trackio"],
     )
     # Newer TRL versions support loss_type + mask_truncated_completions.
     # Pass them best-effort; GRPOConfig raises TypeError on unknown kwargs.
