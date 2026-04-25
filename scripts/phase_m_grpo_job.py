@@ -151,6 +151,13 @@ try:
             "TRACKIO_PROJECT": "devops-pipeline-gym-grpo",
             "VLLM_ENFORCE_EAGER": "1",
             "VLLM_LOGGING_LEVEL": "DEBUG",
+            # kube-sre-gym (sid-rp): "critical for TRL+vLLM colocate" — lets
+            # PyTorch reuse fragmented GPU memory between trainer state and
+            # vLLM serving cache. Without this, allocations stall waiting on
+            # contiguous regions that never free, producing the silent hang
+            # at "Will smartly offload gradients to save VRAM!".
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "TRL_EXPERIMENTAL_SILENCE": "1",
         },
     )
 finally:

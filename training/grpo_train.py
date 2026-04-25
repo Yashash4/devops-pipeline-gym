@@ -553,6 +553,13 @@ def main():
             "(vLLM-compatible single LoRA path)"
         )
 
+    # When --use-vllm is on, switch from Unsloth's "smart" gradient offload
+    # to standard PyTorch checkpointing. Unsloth's smart-offload deadlocks on
+    # vLLM colocate (we kept hanging at "Will smartly offload gradients to
+    # save VRAM!"). kube-sre-gym (sid-rp) uses standard gradient_checkpointing
+    # in the same TRL+vLLM colocate stack and ships cleanly. Costs ~2 GB more
+    # VRAM but avoids the deadlock entirely.
+    grad_ckpt_mode = True if args.use_vllm else "unsloth"
     try:
         model = FastLanguageModel.get_peft_model(
             model,
@@ -560,7 +567,7 @@ def main():
             lora_alpha=16,
             lora_dropout=0.0,
             bias="none",
-            use_gradient_checkpointing="unsloth",
+            use_gradient_checkpointing=grad_ckpt_mode,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                             "gate_proj", "up_proj", "down_proj"],
         )
@@ -700,6 +707,23 @@ def main():
         train_dataset=dataset,
         callbacks=[curriculum_callback],
     )
+
+    # TRL 0.29.0 / vLLM 0.11.x logprobs format mismatch — TRL expects
+    # list-of-lists (top-k per token), vLLM 0.11.x returns plain floats.
+    # Patch from kube-sre-gym (sid-rp) train.py. See TRL issue #4159.
+    # Only fires when use_vllm is on; harmless no-op otherwise.
+    if args.use_vllm and hasattr(trainer, "vllm_generation"):
+        _orig_vllm_gen = trainer.vllm_generation.generate
+
+        def _patched_vllm_generate(**kwargs):
+            result = _orig_vllm_gen(**kwargs)
+            prompt_ids, completion_ids, logprobs, *rest = result
+            if logprobs and logprobs[0] and isinstance(logprobs[0][0], float):
+                logprobs = [[[lp] for lp in seq] for seq in logprobs]
+            return (prompt_ids, completion_ids, logprobs, *rest)
+
+        trainer.vllm_generation.generate = _patched_vllm_generate
+        logger.info("Applied TRL/vLLM logprobs compat patch (kube-sre-gym pattern)")
 
     logger.info("Starting GRPO training: max_steps=%d", args.max_steps)
     # Capture the t=0 snapshot before any training step.
