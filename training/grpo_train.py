@@ -195,6 +195,11 @@ def parse_completion(text: str) -> Dict[str, Any]:
         elif isinstance(ce, dict) and len(ce) == 1:
             k, v = next(iter(ce.items()))
             data["config_edits"] = [{"key": k, "value": str(v)}]
+        elif isinstance(ce, str):
+            # Model sometimes emits "" or "none" instead of omitting the field
+            # Drop it — Pydantic Optional accepts missing field as None
+            data.pop("config_edits", None)
+        # Lists pass through unchanged. None / missing also fine.
         # Normalise enum-valued fields to lowercase. Kaggle dry-run showed the
         # base model likes to emit "role": "SRE" / "DEV" / "OPS" (uppercase),
         # which Pydantic rejects — the Role enum values are lowercase ("sre",
@@ -204,7 +209,6 @@ def parse_completion(text: str) -> Dict[str, Any]:
         for key in ("role", "action_type"):
             if isinstance(data.get(key), str):
                 data[key] = data[key].lower()
-        logger.warning(f"DEBUG parse_completion data: {data!r}")
         return data
     except Exception:
         return fallback
