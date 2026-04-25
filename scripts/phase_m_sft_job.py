@@ -37,10 +37,10 @@ if not WORKDIR.exists():
     )
 os.chdir(WORKDIR)
 
-# Step 2: Install local package
+# Step 2: Install local package (UV envs don't ship pip — use UV's resolver)
 print("[2/5] Installing devops-pipeline-gym package...", flush=True)
 subprocess.run(
-    [sys.executable, "-m", "pip", "install", "-e", ".", "--quiet"],
+    ["uv", "pip", "install", "--system", "-e", ".", "--quiet"],
     check=True,
 )
 
