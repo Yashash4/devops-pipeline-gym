@@ -63,9 +63,9 @@ logger = logging.getLogger("grpo_train")
 # ─── Prompt / completion helpers (dep-free, can be imported on CPU) ──────────
 
 _ROLE_DESCRIPTIONS = {
-    "dev": "You are a Developer. You write configs and propose fixes. Actions you may take: view_config, edit_config, run_migration.",
-    "sre": "You are an SRE. You investigate and diagnose problems. Actions you may take: view_logs, view_pipeline.",
-    "ops": "You are an Ops engineer. You manage production deployments. Actions you may take: deploy, rollback, approve, abort.",
+    "dev": "You are a Developer. You write configs and propose fixes. Actions: view_config, edit_config, run_migration.",
+    "sre": "You are an SRE. You investigate and diagnose. Actions: view_logs, view_pipeline.",
+    "ops": "You are an Ops engineer. You manage production deployments. Actions: deploy, rollback, approve, abort.",
 }
 
 SYSTEM_PROMPT = textwrap.dedent(
@@ -100,43 +100,27 @@ def build_prompt(obs: Dict[str, Any], role: str) -> str:
     available = obs.get("available_actions", [])
     last_result = obs.get("last_action_result") or "none"
 
-    user = textwrap.dedent(
-        f"""
-        ROLE: {role_desc}
-
-        TASK: {obs.get('task_description', '')}
-        GOAL: {obs.get('goal', '')}
-
-        CURRENT SERVICES:
-        {service_lines}
-
-        LAST ACTION RESULT: {last_result}
-
-        AVAILABLE ACTIONS: {', '.join(available) if available else '(none)'}
-
-        OUTPUT SCHEMA (strict — must match Pydantic PipelineAction):
-          role values:         sre | dev | ops          (lowercase)
-          action_type values:  view_pipeline | view_logs | view_config | edit_config |
-                               run_migration | deploy | rollback | approve | abort
-          service_name:        api-gateway | auth-service | cache-service |
-                               database-primary | web-frontend
-          config_edits:        LIST of objects, each with exactly two keys "key" and "value",
-                               both strings. Key uses dot-notation
-                               (e.g. "database.pool_size", "redis.host"). NOT a dict
-                               of named sections like {{"environment": ..., "packages": ...}}.
-
-        EXAMPLES (valid JSON bodies):
-          {{"action_type": "view_pipeline", "role": "sre"}}
-          {{"action_type": "view_logs", "service_name": "cache-service", "role": "sre"}}
-          {{"action_type": "edit_config", "service_name": "cache-service",
-            "config_edits": [{{"key": "redis.host", "value": "redis-prod.internal:6379"}}],
-            "role": "dev"}}
-          {{"action_type": "deploy", "service_name": "api-gateway",
-            "target_version": "v2.3.1", "role": "ops"}}
-
-        Respond with ONE JSON action matching the schema above. No prose, no code fences.
-        """
-    ).strip()
+    actions_str = ', '.join(available) if available else '(none)'
+    # Build flush-left to match SFT trajectory user-prompt format byte-exactly.
+    # Avoid textwrap.dedent — it misbehaves when an interpolated multi-line
+    # value (service_lines) has different leading whitespace than the f-string
+    # template, producing mixed indents.
+    user = (
+        f"ROLE: {role_desc}\n"
+        f"\n"
+        f"TASK: {obs.get('task_description', '')}\n"
+        f"GOAL: {obs.get('goal', '')}\n"
+        f"\n"
+        f"CURRENT SERVICES:\n"
+        f"{service_lines}\n"
+        f"\n"
+        f"LAST ACTION RESULT: {last_result}\n"
+        f"PREVIOUS HANDOFF NOTES: none\n"
+        f"\n"
+        f"AVAILABLE ACTIONS: {actions_str}\n"
+        f"\n"
+        f"Respond with ONE JSON action."
+    )
     return user
 
 

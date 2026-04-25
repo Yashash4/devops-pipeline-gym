@@ -157,6 +157,7 @@ try:
             "--batch-size", "4",
             "--num-generations", "8",
             "--learning-rate", "5e-6",
+            "--max-completion-length", "512",
             "--output-dir", "/workspace/grpo_output",
         ],
         check=True,
