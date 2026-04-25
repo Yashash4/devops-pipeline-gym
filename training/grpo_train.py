@@ -140,6 +140,36 @@ def build_prompt(obs: Dict[str, Any], role: str) -> str:
     return user
 
 
+def poll_curriculum_progress(env_url: str, output_path: "Path", step: int) -> None:
+    """Phase J.7 — GET /curriculum_progress and append to a JSONL log.
+
+    Best-effort: any failure is logged as a warning print so training never
+    crashes from telemetry. Uses urllib (stdlib) — no new dependency.
+    """
+    import json as _json
+    import time as _time
+    import urllib.error
+    import urllib.request
+
+    url = f"{env_url.rstrip('/')}/curriculum_progress"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status != 200:
+                print(f"[curriculum_poll] step={step} HTTP {resp.status} — skipping",
+                      flush=True)
+                return
+            payload = _json.loads(resp.read().decode("utf-8"))
+        payload["step"] = step
+        payload["timestamp"] = _time.time()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(payload) + "\n")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"[curriculum_poll] step={step} failed: {type(e).__name__}: {e} — continuing",
+              flush=True)
+
+
 def parse_completion(text: str) -> Dict[str, Any]:
     """Extract an action dict from a model completion.
 
@@ -610,15 +640,41 @@ def main():
             logger.warning("GRPOConfig does not accept %s; skipping", extra_key)
 
     grpo_config = GRPOConfig(**cfg_kwargs)
+
+    # Phase J.7 — poll /curriculum_progress every 10 GRPO steps and append
+    # the snapshot to outputs/<run>/curriculum_progress.jsonl. Best-effort:
+    # endpoint failures log a warning, never crash training.
+    from transformers import TrainerCallback
+
+    class _CurriculumProgressCallback(TrainerCallback):
+        def __init__(self, env_url: str, output_path: Path, every_n_steps: int = 10):
+            self.env_url = env_url
+            self.output_path = output_path
+            self.every_n_steps = max(1, int(every_n_steps))
+
+        def on_step_end(self, args_, state, control, **_kwargs):
+            step = int(getattr(state, "global_step", 0))
+            if step > 0 and step % self.every_n_steps == 0:
+                poll_curriculum_progress(self.env_url, self.output_path, step)
+
+    curriculum_callback = _CurriculumProgressCallback(
+        env_url=args.env_url,
+        output_path=out_dir / "curriculum_progress.jsonl",
+        every_n_steps=10,
+    )
+
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
         reward_funcs=[reward_fn],
         args=grpo_config,
         train_dataset=dataset,
+        callbacks=[curriculum_callback],
     )
 
     logger.info("Starting GRPO training: max_steps=%d", args.max_steps)
+    # Capture the t=0 snapshot before any training step.
+    poll_curriculum_progress(args.env_url, out_dir / "curriculum_progress.jsonl", step=0)
     trainer.train()
 
     # Save adapter.
