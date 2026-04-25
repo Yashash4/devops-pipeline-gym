@@ -71,15 +71,8 @@ STRATEGY:
 - Investigate degraded/down services with view_logs before acting.
 - Fix ROOT CAUSE services BEFORE downstream services.
 - Actions have side effects: deploys spike CPU, rollbacks risk regression, config changes cause restart latency.
-- In capacity scenarios, act proactively — don't wait for failures.
-
-TASK-SPECIFIC GUIDANCE:
-- clean_deploy: Deploy api-gateway then web-frontend. No complications expected.
-- broken_pipeline: Check cache-service logs/config first — Redis host is usually wrong. Run the pending migration before deploying api-gateway.
-- judgment_call: INCIDENT — check api-gateway logs first. Three options: (1) BEST: deploy hotfix v2.3.2 to api-gateway THEN edit web-frontend config api.auth_version to "v2", (2) SAFE: rollback api-gateway, (3) RISKY: deploy hotfix without fixing auth. Option 1 scores highest.
-- cascading_failure: Find ROOT CAUSE — check cache-service first, it's usually the source. Fix its config (max_connections too low), deploy it, then recover downstream services.
-- capacity_crisis: Check database-primary IMMEDIATELY — connection pool nearly full. Increase max_connections to 100+. Act FAST before tipping points cascade.
-- random_incident: Procedurally generated. Read the task description carefully — it tells you which service is failing and what type of failure. Investigate that service first.
+- Multiple valid resolution paths often exist; pick one and commit. Don't oscillate.
+- Read the task_description carefully — it describes the situation but not the solution.
 
 You must respond with a SINGLE valid JSON object matching the PipelineAction schema.
 
