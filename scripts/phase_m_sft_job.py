@@ -59,9 +59,9 @@ subprocess.run(
     [
         sys.executable, "training/sft_warmup.py",
         "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
-        "--trajectories-path", "data/sft_trajectories.jsonl",
+        "--trajectories", "data/sft_trajectories.jsonl",
         "--output-dir", "/workspace/sft_output",
-        "--num-epochs", "2",
+        "--epochs", "2",
         "--batch-size", "4",
         "--lora-r", "16",
         "--lora-alpha", "32",
