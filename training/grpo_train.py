@@ -39,7 +39,6 @@ Phase 6.5 SFT-adapter-fix test procedure (run on Kaggle T4):
         --sft-adapter-path outputs/sft_warmup/final \\
         --env-url http://127.0.0.1:8000 \\
         --max-steps 3 --num-generations 4 --max-episode-steps 8 \\
-        --use-judge --judge-model llama-3.3-70b-versatile \\
         --output-dir outputs/grpo_sft_test
     # 4. Verify: no CUDA assert errors, reward > 0 on step 1,
     #    frac_reward_zero_std < 0.5, adapter log lines show two adapters:
@@ -79,8 +78,7 @@ SYSTEM_PROMPT = textwrap.dedent(
       action_type  (one of view_pipeline, view_logs, view_config, edit_config,
                    run_migration, deploy, rollback, approve, abort)
       role         (dev / sre / ops — must match the role assigned to you)
-      service_name, target_version, config_edits, migration_name, reason,
-      handoff_notes (optional; a short diagnosis or hand-off note)
+      service_name, target_version, config_edits, migration_name, reason
     """
 ).strip()
 
@@ -100,7 +98,6 @@ def build_prompt(obs: Dict[str, Any], role: str) -> str:
         for s in services
     )
     available = obs.get("available_actions", [])
-    prev_handoff = obs.get("previous_handoff") or "none"
     last_result = obs.get("last_action_result") or "none"
 
     user = textwrap.dedent(
@@ -114,7 +111,6 @@ def build_prompt(obs: Dict[str, Any], role: str) -> str:
         {service_lines}
 
         LAST ACTION RESULT: {last_result}
-        PREVIOUS HANDOFF NOTES: {prev_handoff}
 
         AVAILABLE ACTIONS: {', '.join(available) if available else '(none)'}
 
@@ -134,8 +130,7 @@ def build_prompt(obs: Dict[str, Any], role: str) -> str:
           {{"action_type": "view_logs", "service_name": "cache-service", "role": "sre"}}
           {{"action_type": "edit_config", "service_name": "cache-service",
             "config_edits": [{{"key": "redis.host", "value": "redis-prod.internal:6379"}}],
-            "role": "dev",
-            "handoff_notes": "cache redis.host was pointing to staging; switched to prod"}}
+            "role": "dev"}}
           {{"action_type": "deploy", "service_name": "api-gateway",
             "target_version": "v2.3.1", "role": "ops"}}
 
@@ -218,12 +213,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Max steps per episode in the multi-step reward rollout")
     p.add_argument("--continuation-temperature", type=float, default=0.7,
                    help="Sampling temperature for continuation actions (steps 2..N)")
-    p.add_argument("--use-judge", action="store_true",
-                   help="Enable Groq LLM judge at episode end (adds judge_weight * score)")
-    p.add_argument("--judge-model", default="llama-3.3-70b-versatile",
-                   help="Groq model id for the judge")
-    p.add_argument("--judge-weight", type=float, default=1.0,
-                   help="Multiplier applied to judge score when --use-judge is on")
     return p
 
 
@@ -326,8 +315,6 @@ def make_reward_function(
     model_ref=None,
     tokenizer_ref=None,
     system_prompt: str = "",
-    judge_client=None,
-    judge_weight: float = 1.0,
     max_episode_steps: int = 12,
     continuation_temperature: float = 0.7,
     continuation_max_tokens: int = 256,
@@ -346,10 +333,10 @@ def make_reward_function(
     This is only used by CPU-host sanity checks; real training paths
     always pass model and tokenizer.
 
-    Optional Groq LLM judge: if `judge_client` is provided and
-    `judge_weight > 0`, the episode reward gets `judge_weight * score`
-    added at episode end (score clipped to [-1, +1] by the client). Any
-    judge failure falls through returning 0.0 so training continues.
+    Reward is purely outcome-based from env.step() — no LLM judge in the
+    loop (Groq judge_client cut for kube-sre-gym overlap; deterministic
+    grading is required for plagiarism-check transparency and reproducible
+    GRPO gradients).
     """
     from devops_pipeline_gym.models import PipelineAction
 
@@ -376,14 +363,7 @@ def make_reward_function(
                     continue
 
                 with _make_sync_client(env_url) as client:
-                    reset_result = client.reset()
-                    task_description = ""
-                    if getattr(reset_result, "observation", None) is not None:
-                        obs0 = reset_result.observation
-                        if hasattr(obs0, "task_description"):
-                            task_description = obs0.task_description or ""
-                        elif isinstance(obs0, dict):
-                            task_description = obs0.get("task_description", "") or ""
+                    client.reset()
 
                     # STEP 1 — the training completion (GRPO gradient target).
                     try:
@@ -395,9 +375,6 @@ def make_reward_function(
                     episode_reward = float(getattr(result, "reward", 0.0) or 0.0)
                     done = bool(getattr(result, "done", False))
                     current_obs = getattr(result, "observation", None)
-                    action_history: List[Dict[str, Any]] = [
-                        {"action": action_data, "reward": episode_reward}
-                    ]
 
                     # STEPS 2..N — continue with the same model (only when
                     # multi_step; otherwise degrade to single-step bandit).
@@ -436,28 +413,10 @@ def make_reward_function(
                             episode_reward += step_reward
                             done = bool(getattr(step_result, "done", False))
                             current_obs = getattr(step_result, "observation", None)
-                            action_history.append(
-                                {"action": action_data_n, "reward": step_reward}
-                            )
                         except Exception as e:
                             logger.warning("step %d failed: %s", step + 1, str(e)[:80])
                             episode_reward -= 0.1  # small penalty; keep the loop going
                         step += 1
-
-                    # Optional LLM judge at episode end.
-                    if judge_client is not None and judge_weight > 0:
-                        try:
-                            final_obs_dict = obs_dict if obs_dict else {}
-                            judge_score = judge_client.score_episode(
-                                task_name=task_description[:120] or task,
-                                action_history=action_history,
-                                final_observation=final_obs_dict,
-                                episode_reward=episode_reward,
-                                done=done,
-                            )
-                            episode_reward += judge_weight * float(judge_score or 0.0)
-                        except Exception as e:
-                            logger.warning("judge call failed (non-fatal): %s", str(e)[:100])
 
                 rewards.append(episode_reward)
             except Exception as e:
@@ -606,25 +565,6 @@ def main():
                 pct,
             )
 
-    # Phase 6.5 — optional Groq LLM judge (episode-end only).
-    judge_client = None
-    if args.use_judge:
-        from server.judge_client import GroqJudgeClient
-        judge_client = GroqJudgeClient(
-            groq_api_key=os.environ.get("GROQ_API_KEY"),
-            ollama_api_key=os.environ.get("OLLAMA_API_KEY"),
-            ollama_host=os.environ.get("OLLAMA_HOST"),
-            model=args.judge_model,
-        )
-        if judge_client.groq_key:
-            logger.info("Groq judge enabled (model=%s, weight=%.2f)",
-                        args.judge_model, args.judge_weight)
-        else:
-            logger.warning(
-                "GROQ_API_KEY missing; judge will try Ollama fallback and "
-                "otherwise return 0.0 (no judge bonus)."
-            )
-
     logger.info("Building dataset from env rollouts (prompts_per_task=%d)", args.prompts_per_task)
     prompts = build_dataset(args.env_url, prompts_per_task=args.prompts_per_task)
     logger.info("Dataset size: %d prompts", len(prompts))
@@ -635,8 +575,6 @@ def main():
         model_ref=model,
         tokenizer_ref=tokenizer,
         system_prompt=SYSTEM_PROMPT,
-        judge_client=judge_client,
-        judge_weight=args.judge_weight if args.use_judge else 0.0,
         max_episode_steps=args.max_episode_steps,
         continuation_temperature=args.continuation_temperature,
         continuation_max_tokens=args.max_completion_length,
