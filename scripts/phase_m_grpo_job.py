@@ -128,23 +128,24 @@ if not health_ok:
     raise RuntimeError(f"env-server failed to come up in 105s")
 
 try:
-    # Step 5: Run GRPO training
-    print("[5/7] Running GRPO 200 steps WITHOUT vLLM (single LoRA + SFT prior)...", flush=True)
-    print("    NOTE: vLLM colocate is incompatible with our multi-step rollout —", flush=True)
-    print("    _generate_continuation_action uses model.generate() which deadlocks", flush=True)
-    print("    against vLLM's exclusive GPU lock. Non-vLLM path: ~30s/step, robust.", flush=True)
+    # Step 5: Run GRPO training (PROOF-RUN config — capped experiment)
+    print("[5/7] PROOF RUN: 20 steps, 2 generations, 128 token cap, no vLLM", flush=True)
+    print("    Hard stop rule: if step 1 metric not in Track-IO by 8 min after", flush=True)
+    print("    'Starting GRPO training' line, KILL and ship SFT-only.", flush=True)
     subprocess.run(
         [
             sys.executable, "training/grpo_train.py",
             "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
             "--sft-adapter-path", "none",
             "--env-url", "http://localhost:8000",
-            "--max-steps", "200",
-            "--batch-size", "4",
-            "--grad-accum", "8",
-            "--num-generations", "8",
-            "--learning-rate", "2e-6",
-            "--max-completion-length", "512",
+            "--max-steps", "20",
+            "--batch-size", "1",
+            "--grad-accum", "4",
+            "--num-generations", "2",
+            "--prompts-per-task", "2",
+            "--max-episode-steps", "6",
+            "--learning-rate", "5e-6",
+            "--max-completion-length", "128",
             "--output-dir", "/workspace/grpo_output",
             # No --use-vllm: model.generate path, no GPU lock contention
         ],
