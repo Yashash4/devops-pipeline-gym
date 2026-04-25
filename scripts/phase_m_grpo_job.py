@@ -3,6 +3,7 @@
 # dependencies = [
 #     "torch>=2.4",
 #     "unsloth",
+#     "vllm>=0.6.0",
 #     "trl>=0.12",
 #     "peft>=0.13",
 #     "datasets>=3.0",
