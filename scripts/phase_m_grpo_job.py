@@ -5,7 +5,7 @@
 #     "unsloth",
 #     "vllm>=0.6.0",
 #     "trl>=0.12",
-#     "peft>=0.13",
+#     "peft>=0.18.0,<0.19",
 #     "datasets>=3.0",
 #     "bitsandbytes>=0.43",
 #     "huggingface_hub>=0.30",
