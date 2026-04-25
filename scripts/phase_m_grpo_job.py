@@ -51,10 +51,30 @@ subprocess.run(
     check=True,
 )
 
-# Step 3: SKIPPED — Option 3 trains GRPO from raw base on a single LoRA
-# (no SFT adapter). Stacked LoRA + Unsloth vLLM = AttributeError on
-# load_lora (proven yesterday). Single LoRA + vLLM = works.
-print("[3/7] Skipping SFT adapter pull (Option 3: raw base + single LoRA + vLLM)", flush=True)
+# Step 3: Pull SFT adapter from Hub.
+# We dropped this in Option 3 because vLLM colocate hates stacked LoRAs
+# (load_lora AttributeError on Unsloth's wrapper). But the proof-run path
+# is non-vLLM (--use-vllm absent), so the stacked-LoRA conflict is gone.
+# Restoring SFT warm-start: untrained base scored -1.07; SFT alone scored
+# +2.155. GRPO from SFT prior is dramatically more likely to converge
+# than GRPO from chaos (FAQ #16: "RL is improvement, not magic from scratch").
+print("[3/7] Pulling SFT adapter from Hub (warm-start for GRPO)...", flush=True)
+from huggingface_hub import snapshot_download
+
+sft_path = snapshot_download(
+    "yashash045/devops-pipeline-gym-sft-adapter",
+    token=os.environ["HF_TOKEN"],
+    local_dir="/workspace/sft_adapter",
+)
+adapter_config = os.path.join(sft_path, "final", "adapter_config.json")
+if not os.path.exists(adapter_config):
+    print(f"ERROR: adapter_config.json not found at {adapter_config}", flush=True)
+    print(f"Contents of {sft_path}:", flush=True)
+    for root, dirs, files in os.walk(sft_path):
+        for f in files[:20]:
+            print(f"  {os.path.join(root, f)}", flush=True)
+    raise FileNotFoundError(f"adapter_config.json missing at {adapter_config}")
+print(f"    [OK] SFT adapter at {sft_path}/final", flush=True)
 
 # Step 4: Boot env-server in background
 print("[4/7] Booting env-server on localhost:8000...", flush=True)
@@ -128,15 +148,15 @@ if not health_ok:
     raise RuntimeError(f"env-server failed to come up in 105s")
 
 try:
-    # Step 5: Run GRPO training (PROOF-RUN config — capped experiment)
-    print("[5/7] PROOF RUN: 20 steps, 2 generations, 128 token cap, no vLLM", flush=True)
-    print("    Hard stop rule: if step 1 metric not in Track-IO by 8 min after", flush=True)
-    print("    'Starting GRPO training' line, KILL and ship SFT-only.", flush=True)
+    # Step 5: Run GRPO training (PROOF-RUN v2 — SFT warm-start + tight rollout)
+    print("[5/7] PROOF RUN v2: 20 steps from SFT prior + tight rollout (no vLLM)", flush=True)
+    print(f"    SFT warm-start: {sft_path}/final (already scored +2.155 on judgment_call)", flush=True)
+    print("    GRPO is polishing, not learning from chaos. Hard stop: 6 min for step 1.", flush=True)
     subprocess.run(
         [
             sys.executable, "training/grpo_train.py",
             "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
-            "--sft-adapter-path", "none",
+            "--sft-adapter-path", f"{sft_path}/final",
             "--env-url", "http://localhost:8000",
             "--max-steps", "20",
             "--batch-size", "1",
