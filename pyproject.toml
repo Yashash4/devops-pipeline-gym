@@ -42,7 +42,8 @@ training = [
     "datasets>=2.20",
     "matplotlib>=3.8",
     "accelerate>=0.30",
-    # judge_client.py uses httpx for Groq / Ollama calls when --use-judge is set.
+    # httpx kept for client/HTTP utility use in training scripts (matches base
+    # requirements; repeated here so '.[training]' installs don't omit it).
     "httpx>=0.25",
 ]
 
