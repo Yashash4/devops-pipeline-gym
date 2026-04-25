@@ -59,7 +59,19 @@ sft_path = snapshot_download(
     token=os.environ["HF_TOKEN"],
     local_dir="/workspace/sft_adapter",
 )
-print(f"    SFT adapter at: {sft_path}", flush=True)
+
+# Verify expected adapter file exists at <sft_path>/final
+adapter_config = os.path.join(sft_path, "final", "adapter_config.json")
+if not os.path.exists(adapter_config):
+    print(f"ERROR: adapter_config.json not found at {adapter_config}", flush=True)
+    print(f"Contents of {sft_path}:", flush=True)
+    for root, dirs, files in os.walk(sft_path):
+        for f in files[:20]:
+            print(f"  {os.path.join(root, f)}", flush=True)
+    raise FileNotFoundError(f"adapter_config.json missing at {adapter_config}")
+print(f"    [OK] Verified adapter_config.json exists", flush=True)
+print(f"    SFT adapter root: {sft_path}", flush=True)
+print(f"    SFT adapter resolved: {sft_path}/final (adapter_config.json + adapter_model.safetensors)", flush=True)
 
 # Step 4: Boot env-server in background
 print("[4/7] Booting env-server on localhost:8000...", flush=True)
@@ -139,7 +151,7 @@ try:
         [
             sys.executable, "training/grpo_train.py",
             "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
-            "--sft-adapter-path", sft_path,
+            "--sft-adapter-path", f"{sft_path}/final",
             "--env-url", "http://localhost:8000",
             "--max-steps", "200",
             "--batch-size", "4",
