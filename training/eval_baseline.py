@@ -182,7 +182,6 @@ def run_episode(client, model_adapter, task: str, seed_offset: int) -> Dict[str,
     reward_sum = 0.0
     rewards: List[float] = []
     roles_used: set = set()
-    handoff_scores: List[float] = []
     done = False
     steps = 0
     broke_healthy = False
@@ -203,11 +202,6 @@ def run_episode(client, model_adapter, task: str, seed_offset: int) -> Dict[str,
         r = float(result.reward or 0.0)
         rewards.append(r)
         reward_sum += r
-        if getattr(obs, "previous_handoff", None):
-            # Hand-off bonus is already reflected in reward — we log the raw
-            # notes length as a proxy signal so the chart can show "agent did
-            # or didn't use notes."
-            handoff_scores.append(len(obs.previous_handoff))
         if result.done:
             done = True
             break
@@ -237,7 +231,6 @@ def run_episode(client, model_adapter, task: str, seed_offset: int) -> Dict[str,
         "roles_used": sorted(roles_used),
         "num_roles_used": len(roles_used),
         "all_3_modes_used": all_3_modes,
-        "handoff_notes_count": len(handoff_scores),
         "done": done,
         "success": success,
         "healthy_ratio": round(healthy_ratio, 3),
@@ -320,7 +313,7 @@ def main():
                         "reward_sum": 0.0, "rewards_per_step": [],
                         "roles_used": [], "num_roles_used": 0,
                         "all_3_modes_used": False,
-                        "handoff_notes_count": 0, "done": False,
+                        "done": False,
                         "success": False, "healthy_ratio": 0.0,
                         "error": f"{type(e).__name__}: {e}",
                     }
