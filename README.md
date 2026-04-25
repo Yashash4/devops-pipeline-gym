@@ -18,6 +18,12 @@ tags:
 **Theme:** World Modeling 3.1 — Professional Tasks.
 **Live Space:** [yashash045/devops-pipeline-gym](https://huggingface.co/spaces/yashash045/devops-pipeline-gym) · **Code:** [Yashash4/devops-pipeline-gym](https://github.com/Yashash4/devops-pipeline-gym)
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Yashash4/devops-pipeline-gym/blob/main/devops_pipeline_gym_colab.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://www.kaggle.com/code/import?source=https%3A//github.com/Yashash4/devops-pipeline-gym/blob/main/devops_pipeline_gym_colab.ipynb)
+
+**Quick re-run for judges:** open the Colab badge above → set `HF_TOKEN` in Secrets → run all cells. ~15 min on free T4. Loads our trained adapter, runs baseline + trained on the same seed, shows the delta.
+
+**Trained adapter:** [yashash045/devops-pipeline-gym-trained](https://huggingface.co/yashash045/devops-pipeline-gym-trained) · **SFT warmup:** [yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter) · **Track-IO:** [yashash045/dpg-trackio](https://huggingface.co/spaces/yashash045/dpg-trackio)
+
 ---
 
 ## The Problem
