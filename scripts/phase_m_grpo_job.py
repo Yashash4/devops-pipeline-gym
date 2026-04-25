@@ -129,17 +129,18 @@ if not health_ok:
 
 try:
     # Step 5: Run GRPO training
-    print("[5/7] Running GRPO 30 steps from raw base + vLLM (single LoRA, debug verbosity)...", flush=True)
+    print("[5/7] Running GRPO 200 steps on A100 + vLLM (single LoRA path, full Stage B)...", flush=True)
     subprocess.run(
         [
             sys.executable, "training/grpo_train.py",
             "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
             "--sft-adapter-path", "none",
             "--env-url", "http://localhost:8000",
-            "--max-steps", "30",
+            "--max-steps", "200",
             "--batch-size", "4",
+            "--grad-accum", "8",
             "--num-generations", "8",
-            "--learning-rate", "5e-6",
+            "--learning-rate", "2e-6",
             "--max-completion-length", "512",
             "--output-dir", "/workspace/grpo_output",
             "--use-vllm",
@@ -150,12 +151,12 @@ try:
             "TRACKIO_SPACE_ID": "yashash045/dpg-trackio",
             "TRACKIO_PROJECT": "devops-pipeline-gym-grpo",
             "VLLM_ENFORCE_EAGER": "1",
-            "VLLM_LOGGING_LEVEL": "DEBUG",
+            # Drop VLLM_LOGGING_LEVEL=DEBUG — logs are now clean enough
+            # without the per-batch profile spam.
             # kube-sre-gym (sid-rp): "critical for TRL+vLLM colocate" — lets
             # PyTorch reuse fragmented GPU memory between trainer state and
-            # vLLM serving cache. Without this, allocations stall waiting on
-            # contiguous regions that never free, producing the silent hang
-            # at "Will smartly offload gradients to save VRAM!".
+            # vLLM serving cache. Even with A100 80GB, keeping this on
+            # is harmless and matches kube-sre-gym's working H100 config.
             "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
             "TRL_EXPERIMENTAL_SILENCE": "1",
         },

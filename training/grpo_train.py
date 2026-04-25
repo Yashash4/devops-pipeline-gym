@@ -499,17 +499,17 @@ def main():
     if args.use_vllm:
         # Unsloth vLLM colocate path. fast_inference flips the model into a
         # vLLM-served generation backend; max_lora_rank must match the GRPO
-        # LoRA rank (16); gpu_memory_utilization at 0.4 leaves more headroom
-        # for the trainer's gradient offload (deadlocked at 0.6 on L4).
+        # LoRA rank (16); gpu_memory_utilization at 0.5 matches kube-sre-gym's
+        # (sid-rp) working H100 config — A100 80GB has plenty of room.
         # enforce_eager bypasses torch.compile, sidestepping the v0.19 graph
         # bug seen on Qwen3 (size_N nodes still have users at decompose-time).
         fpt_kwargs.update(
             fast_inference=True,
             max_lora_rank=16,
-            gpu_memory_utilization=0.4,
+            gpu_memory_utilization=0.5,
             enforce_eager=True,
         )
-        logger.info("vLLM colocate enabled (fast_inference=True, max_lora_rank=16, gpu_mem=0.4, enforce_eager=True)")
+        logger.info("vLLM colocate enabled (fast_inference=True, max_lora_rank=16, gpu_mem=0.5, enforce_eager=True)")
     model, tokenizer = FastLanguageModel.from_pretrained(**fpt_kwargs)
 
     # Phase 6.5 hotfix — load the SFT adapter as a FROZEN named prior and
@@ -561,11 +561,13 @@ def main():
     # VRAM but avoids the deadlock entirely.
     grad_ckpt_mode = True if args.use_vllm else "unsloth"
     try:
+        # lora_alpha = 2 * r is Daniel Han (Unsloth) and kube-sre-gym (sid-rp)
+        # standard. lora_alpha=16 (1× rank) was a leftover from earlier dry-runs.
         model = FastLanguageModel.get_peft_model(
             model,
             r=16,
-            lora_alpha=16,
-            lora_dropout=0.0,
+            lora_alpha=32,
+            lora_dropout=0.05,
             bias="none",
             use_gradient_checkpointing=grad_ckpt_mode,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
@@ -646,7 +648,7 @@ def main():
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.learning_rate,
         lr_scheduler_type="cosine",
-        warmup_steps=1,
+        warmup_steps=2,
         max_grad_norm=1.0,
         logging_steps=1,
         save_steps=20,
@@ -654,6 +656,14 @@ def main():
         beta=0.01,
         push_to_hub=False,
         report_to=["trackio"],
+        # kube-sre-gym pattern — modern PyTorch checkpointing (the older
+        # use_reentrant=True is deprecated and has known issues with PEFT).
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        # Explicit GRPO temperature; TRL default may vary across versions.
+        # 1.0 maximizes exploration (GRPO needs diverse completions for
+        # meaningful advantage estimation). kube-sre-gym uses 1.0.
+        temperature=1.0,
     )
     # Newer TRL versions support loss_type + mask_truncated_completions +
     # vLLM colocate plumbing. Pass best-effort; GRPOConfig raises TypeError
@@ -667,7 +677,7 @@ def main():
         # In-process vLLM (no external server). Memory fraction must align
         # with FastLanguageModel.from_pretrained gpu_memory_utilization above.
         extras.append(("vllm_mode", "colocate"))
-        extras.append(("vllm_gpu_memory_utilization", 0.4))
+        extras.append(("vllm_gpu_memory_utilization", 0.5))
     for extra_key, extra_val in extras:
         try:
             _probe = GRPOConfig(**{**cfg_kwargs, extra_key: extra_val})
