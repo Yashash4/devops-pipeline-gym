@@ -11,285 +11,180 @@ tags:
   - openenv
 ---
 
-# DevOps Pipeline Environment
+# DevOps Pipeline Gym
 
-## Overview
+*An OpenEnv RL environment that trains LLMs to make production-critical decisions under uncertainty.*
 
-This environment enables training AI agents for automated DevOps incident management — an AI SRE agent that can diagnose failures, manage deployments, and make judgment calls under production pressure. It simulates a realistic microservice architecture where services have interdependent health metrics, cascading failures propagate through dependency chains, and every action has trade-off consequences.
+**Theme:** World Modeling 3.1 — Professional Tasks.
+**Live Space:** [yashash045/devops-pipeline-gym](https://huggingface.co/spaces/yashash045/devops-pipeline-gym) · **Code:** [Yashash4/devops-pipeline-gym](https://github.com/Yashash4/devops-pipeline-gym)
 
-CI/CD deployment management is the most common engineering workflow at companies like Meta, Google, and Amazon. This environment captures the real decision-making complexity of production deployments: flaky tests vs real bugs, config errors that only surface in staging, cascading failures that spiral through dependency chains, and production incidents where every minute of downtime costs revenue. The agent must investigate before acting, fix root causes before symptoms, and accept that every intervention has side effects.
+---
 
-This environment is useful for training RL agents to assist with deployment workflows, evaluating LLM reasoning under ambiguity and time pressure, and benchmarking investigation-before-action behavior. **Novel for OpenEnv**: No CI/CD pipeline environment exists on the Hub.
+## The Problem
 
-## Why This Environment Matters
+Modern incident response is not a knowledge problem — it's a sequencing problem. The on-call engineer rarely lacks the technical knowledge to fix a broken auth service or scale a saturated database. What they lack is the discipline to investigate before acting, the judgment to identify root cause through cascading symptoms, and the experience to choose among multiple valid recovery paths.
 
-CI/CD pipeline management is the most common engineering workflow at Meta, Google, and Amazon — every SRE team performs incident response daily. This environment fills a gap: no CI/CD pipeline environment exists on the OpenEnv Hub.
+Frontier LLMs reflect this gap precisely. Qwen2.5-72B scores **0.184** on our hardest task (`judgment_call`) — a stark headroom signal. The model has all the technical knowledge baked in. What it needs is training on the *decisions* that connect knowledge to outcomes.
 
-This environment trains agents to:
-- **Investigate before acting** — partial observability forces information gathering
-- **Diagnose root causes** — cascading failures require tracing through dependency chains
-- **Make trade-off decisions** — every action has side effects (deploy spikes CPU, rollback risks regression)
-- **Act under time pressure** — health degrades each step in incident tasks
-- **Choose between valid strategies** — judgment_call has 3 resolution paths with different risk/reward profiles
+This environment trains exactly that.
 
-The large gap between LLM baseline (0.18–0.70) and optimal (0.63–0.98) demonstrates significant room for RL training improvement across the full skill spectrum.
+## Why A Simulator
 
-## Service Dependency Graph
+Reinforcement learning needs identical state across seeds for gradient stability. Real production systems don't reproduce identically — pod scheduling, network jitter, OOM timing, and live database load all vary between runs. A simulator solves this.
 
-```
-database-primary (PostgreSQL — root, no dependencies)
-├── auth-service (OAuth/JWT provider, depends on database-primary)
-│   ├── api-gateway (router/load balancer, depends on database-primary + auth-service)
-│   │   └── web-frontend (UI app, depends on api-gateway + auth-service)
-│   └── web-frontend
-└── cache-service (Redis cache, depends on database-primary)
-```
+Our simulator is **deterministic** (same seed → same episode), **reproducible** (Docker + Python, runs anywhere), and **free** (no K8s cluster, no paid APIs, no GPU at inference time).
 
-Dependency chain: `database-primary → auth-service → api-gateway → web-frontend` and `database-primary → cache-service`. When an upstream service degrades, its dependents accumulate errors and latency each step.
+We complement [kube-sre-gym](https://huggingface.co/spaces/openenv-community/kube-sre-gym) rather than compete with it. They tackle pod-level `kubectl` operations on a real Kubernetes cluster — high-fidelity, hardware-bound. We tackle CI/CD pipeline workflow on a deterministic simulator — different decision surface, different substrate, complementary scope. Same agent family, different training laboratory.
 
-## Tasks
+## The Four Uncertainty Pillars
 
-### Task 1: Clean Deploy (Easy)
-Deploy 2 services (api-gateway v2.3.1, web-frontend v1.9.0) with all tests passing. No complications — tests basic pipeline execution and deployment sequencing.
-- **Max steps**: 15
-- **Services**: database-primary, auth-service, api-gateway, web-frontend
-- **Key challenge**: Execute staging → production deployment flow without breaking healthy services
+Decisions under uncertainty is what LLMs are *worst at*. This environment trains it directly via four design pillars.
 
-### Task 2: Broken Pipeline (Medium)
-Diagnose test failures, fix a config error, run a migration, and deploy 3 services. Not all test failures are blocking — the agent must distinguish flaky tests from real bugs.
-- **Max steps**: 20
-- **Services**: database-primary, auth-service, api-gateway, web-frontend, cache-service
-- **Key challenge**: Wrong Redis host in cache-service config, pending migration blocks api-gateway deploy, 3 test failures (2 flaky, 1 deprecated)
+**1. Incomplete Information.** CPU, memory, latency, and error rate are hidden in the observation by default. When a service is unhealthy, its `health` field is masked as `unknown` until the agent invokes `view_logs` or `view_config` on it. Acting blind is allowed but penalised; investigation has a small cost (decaying first-view bonus) but unlocks the data needed to act correctly.
 
-### Task 3: The Judgment Call (Hard)
-Production incident — api-gateway at 1500ms latency and 12 errors/sec. A partially-tested hotfix (v2.3.2) is available. Multiple valid resolution paths with different risk/reward tradeoffs. Health degrades every step (time pressure).
-- **Max steps**: 12
-- **Services**: database-primary (under load), auth-service, api-gateway (degraded), web-frontend
-- **Key challenge**: Three valid paths — deploy hotfix + fix auth config (expert, highest score), rollback (safe but loses features), hotfix only (partial fix). Each has cascading consequences on web-frontend.
+**2. Cascading Consequences.** Five microservices in a dependency graph (`database-primary → auth-service → api-gateway → web-frontend`, `database-primary → cache-service`). Fixing the wrong service while root cause persists makes the situation worse — health degrades further. Wrong-fix-first is a real failure mode the agent must learn to avoid.
 
-### Task 4: Cascading Failure (Medium-Hard)
-Root cause analysis across a dependency chain. cache-service is down due to a config error (max_connections: 5), dragging api-gateway and web-frontend down via cascading failures. Fixing downstream services while root cause persists is futile.
-- **Max steps**: 15
-- **Services**: database-primary, auth-service, cache-service (root cause), api-gateway (degraded), web-frontend (degrading)
-- **Key challenge**: Identify root cause in cache-service config, fix it, then recover downstream services in dependency order
+**3. Multiple Valid Strategies.** The `judgment_call` task has three reasonable resolution paths: deploy hotfix + auth config fix (best), rollback to previous version (safest), or hotfix alone (riskiest). Each scores differently. There is no single correct answer — only better-and-worse trade-offs.
 
-### Task 5: Capacity Crisis (Medium-Hard)
-database-primary is approaching capacity limits under a traffic surge. CPU climbing, connection pool near saturation. The agent must act proactively before cascading failures begin — once the database goes down, recovery is extremely difficult.
-- **Max steps**: 15
-- **Services**: database-primary (stressed), auth-service, api-gateway, cache-service, web-frontend
-- **Key challenge**: Proactive intervention — increase max_connections and shared_buffers before tipping points trigger cascading collapse
+**4. Procedural Variation.** The `random_incident` task generates 40+ distinct scenarios per seed (5 failure types × 4 services × 2 severities, with 30% compound incidents). The agent cannot memorise a fixed answer — it must generalise the *pattern* of investigate → diagnose → fix.
 
-### Task 6: Random Incident (Variable — Procedural Generation)
-Procedurally generated incident from a seed. The failing service (api-gateway, cache-service, auth-service, or web-frontend), failure type (config_error, degraded_performance, capacity_limit, memory_leak, or certificate_expiry), and severity (moderate or severe) are all randomized. 30% chance of compound incident (two services failing simultaneously). Different seeds produce different scenarios — infinite variation for curriculum learning.
-- **Max steps**: 15
-- **Services**: All 5 (one randomly failing)
-- **Key challenge**: Read the task description to identify the failing service and failure type, investigate, diagnose, and fix — with no prior knowledge of what's broken
+## Environment Design
 
-## Procedural Generation
+### Action space (9 actions, role-gated)
 
-The `random_incident` task generates unique scenarios from a seed, enabling:
-- **Curriculum learning**: Start with easy seeds, progressively increase difficulty
-- **Generalization testing**: Verify agents handle novel failure combinations
-- **Infinite training data**: Every seed produces a different incident
+| Action | Role | Notes |
+|---|---|---|
+| `view_pipeline` | sre | Inspect pipeline state |
+| `view_logs` | sre | Service-specific logs (unmasks health) |
+| `view_config` | dev | Config inspection (also unmasks health) |
+| `edit_config` | dev | Apply key/value config edits |
+| `run_migration` | dev | Run a pending migration |
+| `deploy` | ops | Deploy a target version |
+| `rollback` | ops | Roll back to previous version |
+| `approve` | ops | Terminate episode with success |
+| `abort` | ops | Terminate episode with failure |
 
-Failure space: 5 failure types × 4 services × 2 severities = 40 primary configurations, with 30% compound incidents and randomized initial conditions — hundreds of unique scenarios.
+Each action carries a `role` field (`dev` / `sre` / `ops`). Acting outside your role triggers a `-0.15` penalty and the action is not executed. The current role rotates during multi-step incidents to simulate real on-call handoffs.
 
-## Action Space
+### Observation space
 
-9 typed action types via `PipelineAction`:
+- `services` — list of 5 microservices (`name`, `health`, `current_version`, `cpu_percent`, `memory_percent`, `request_latency_ms`, `error_rate`, `active_connections`, `last_deploy_timestamp`). Resource metrics + degraded-service health are hidden until the agent investigates that service.
+- `pipeline` — build/test/deploy stage state.
+- `migrations` — pending migration list.
+- `active_alerts` — current alerts with severity.
+- `available_actions` — context-sensitive list filtered to the current role.
+- `goal`, `task_description`, `current_role`, `role_history`.
+- `last_action_result`, `last_action_error`, `summary`, `config_snapshot`.
 
-| Action | Description | Required Fields |
-|--------|-------------|-----------------|
-| `view_pipeline` | View overall pipeline status and service summary | — |
-| `view_logs` | View recent logs for a service (reveals CPU/memory) | `service_name` |
-| `view_config` | View current config key-value pairs | `service_name` |
-| `edit_config` | Modify config key-value pairs (causes restart latency spike) | `service_name`, `config_edits` |
-| `run_migration` | Execute a pending database migration | `migration_name` |
-| `deploy` | Deploy service version to staging, then promote to production | `service_name`, `target_version` |
-| `rollback` | Rollback service to previous version (25% regression risk) | `service_name` |
-| `approve` | Approve current state and end episode | `reason` |
-| `abort` | Abort deployment and end episode | `reason` |
+### 6 Tasks
 
-## Observation Space
+| Task | Difficulty | Description |
+|---|---|---|
+| `clean_deploy` | easy | Deploy 2 services with all tests passing. |
+| `broken_pipeline` | medium | Diagnose test failures, fix config errors, run migrations. |
+| `judgment_call` | hard | Production incident with multiple resolution paths and a 12-step time limit. |
+| `cascading_failure` | medium-hard | Root cause hidden behind dependency-chain symptoms. |
+| `capacity_crisis` | medium-hard | Proactive scaling before saturation tipping point. |
+| `random_incident` | variable | Procedurally generated; service + failure type + severity randomised from seed. |
 
-`PipelineObservation` provides the agent's view of the system:
+### Reward (6 outcome-based components)
 
-- **summary**: One-line status — highlights degraded/down services at a glance (e.g., `"WARNING: api-gateway degraded (lat=1500ms, err=12.0/s)"` or `"All services nominal."`)
-- **services**: List of `ServiceStatus` — name, health, version, error_rate, latency, active_connections, last_deploy_timestamp. **Partial observability**: CPU and memory are hidden (show 0.0) until the agent runs `view_logs` for that service.
-- **task_description** and **goal**: Natural language context for the current task
-- **available_actions**: Context-sensitive list of valid action types
-- **last_action_result / last_action_error**: Feedback from the previous step
-- **pipeline**: Current stage, commit SHA, test pass/fail counts, build logs snippet
-- **migrations**: Pending and applied migrations
-- **active_alerts**: Critical/warning/info alerts with timestamps
-- **config_snapshot**: Config key-value pairs (populated after `view_config` or `edit_config`)
-- **step_number / max_steps**: Current progress
-
-## Reward Design
-
-Dense per-step reward that creates a learnable gradient for RL training. Investigation rewards use **diminishing-returns exploration** — first investigation of an unhealthy service gives +0.04, with decay as more services are investigated. Health improvements give proportional reward via system health delta (+0.005 per 1% improvement). **Sub-goal milestones** reward intermediate progress: config fixes (+0.08), migrations (+0.06), and alert resolution (+0.03). Breaking healthy services is heavily penalized (-0.30). All grading is outcome-based — no procedure-based criteria. Rewards are **task-adaptive** — harder tasks with time pressure get steeper gradients (1.0x–1.5x urgency scaling), creating a curriculum-aware reward landscape. Rewards are bounded [-0.35, +0.30] per step to prevent training instability.
+Per-step bounded `[-0.40, +0.32]`, fully deterministic — no LLM judges in the reward loop.
 
 | Signal | Reward | Condition |
-|--------|--------|-----------|
+|---|---|---|
 | Service deployed to production | +0.15 | Service reaches prod successfully |
 | Service verified in staging | +0.05 | Staging health check passes |
 | Config error fixed | +0.08 | Service health improved after config change |
 | Migration completed | +0.06 | Pending migration count decreased |
 | Alert resolved | +0.03 | Alert count decreased |
-| Investigation (degraded svc) | +0.04× | First-time view on unhealthy service (with decay) |
-| Investigation (healthy svc) | +0.01× | First-time view on healthy service (with decay) |
-| Health improvement | +0.005/1% | System health delta |
-| Broke healthy service | -0.30 | Service went from healthy to degraded/down |
-| Repeated investigation | -0.01/-0.03 | Same view on same target (-0.03 if consecutive) |
-| Repeated exact action | -0.02 | Same action_type + service as last step |
+| Role-alignment (Round 2) | +0.02 / −0.05 | `action.role` matches/violates `ROLE_ACTIONS[role]` |
 
-### Reward Shaping Theory
+Plus structural penalties: broken-healthy `−0.30`, repeated investigation `−0.01` / `−0.03` (consecutive), repeated non-view action `−0.02`. End-of-episode terminal bonus: `approve` while all-healthy `+2.0`; `abort` `−1.5`; max-steps-with-unhealthy `−1.5`. Reward shaping is potential-based (Ng et al. 1999) with count-based exploration decay (Bellemare et al. 2016).
 
-The health delta component (+0.005 per 1% system health improvement) approximates potential-based reward shaping (Ng et al., 1999), where Φ(s) = system_health/100. This preserves optimal policy while providing continuous gradient signal.
+## Results
 
-Investigation bonuses use count-based exploration decay: reward = base × 1/(1 + 0.3n), consistent with Bellemare et al. (2016). This incentivizes initial exploration while preventing reward hacking through repeated view actions.
+*Filled in after Saturday training. Anchor: untrained Qwen3-1.7B-bnb-4bit vs the same model after SFT (78 trajectories) + GRPO (200 steps).*
 
-Task urgency scaling (1.0×–1.5×) implements curriculum-aware reward calibration — harder tasks receive steeper gradients to maintain learning signal despite longer optimal trajectories.
+Pitch metrics targeted:
 
-### Exploit Resistance
+| Metric | Untrained | Trained (target) |
+|---|---|---|
+| Avg reward (`judgment_call`) | 0.18 | 0.42 |
+| Steps to recovery (`cascading_failure`) | 14 | 6 |
+| Success rate (across 6 tasks) | 22% | 58% |
 
-| Attack Vector | Defense |
-|--------------|---------|
-| Repeated view_pipeline spam | Diminishing returns decay: reward = base/(1+0.3n), consecutive repeat -0.03 |
-| Break-then-fix exploit | -0.30 penalty exceeds +0.15 deploy + health recovery gains |
-| Step-stalling for investigation bonuses | Capped by diminishing returns + max_steps + efficiency grader component |
-| Config-grep pattern matching | Hard tasks removed prescriptive log messages; agent must diagnose from symptoms |
-| Ignoring secondary incidents | Compound incident grader awards 0.10 bonus for fixing secondary service |
+`training/eval_baseline.py` records `avg_steps_to_recovery` per task (Phase J.5 metric). `training/generate_comparison_chart.py` produces a side-by-side reward + recovery PNG. `training/export_replay.py` + `training/render_replay.py` produce per-step PNG frames for the before/after demo video.
 
-## Baseline Scores
+## Reproduce It Yourself
 
-Model: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Router
-
-| Task | Difficulty | LLM Baseline | Optimal | Gap |
-|------|-----------|-------------|---------|-----|
-| clean_deploy | Easy | 0.700 | 0.947 | +0.247 |
-| broken_pipeline | Medium | 0.482 | 0.890 | +0.408 |
-| judgment_call | Hard | 0.184 | 0.935 | +0.751 |
-| cascading_failure | Med-Hard | 0.280 | 0.883 | +0.603 |
-| capacity_crisis | Med-Hard | 0.250 | 0.634 | +0.384 |
-| random_incident (seed 6006) | Variable | 0.350 | 0.982 | +0.632 |
-
-LLM baselines re-calibrated after environment tuning (v2). Optimal scores from scripted expert trajectories. The large gap between LLM baseline and optimal demonstrates significant room for RL training improvement — the environment produces meaningful reward signal across the full skill spectrum. The `random_incident` task generates unique scenarios from each seed, enabling curriculum learning.
-
-### Seed Curriculum for RL Training
-
-The `random_incident` task generates unique scenarios from each seed via `DEVOPS_SEED` env var. With 5 failure types, compound incidents, and randomized initial conditions, the configuration space produces hundreds of distinct scenarios.
-
-**Recommended curriculum:**
-- Seeds 1–20: Single-service failures, moderate severity (warm-up)
-- Seeds 21–60: Mix of single and compound incidents (core training)
-- Seeds 61–100: Severe failures with compound incidents (advanced)
-
-Set `DEVOPS_SEED` at reset time (reads from env var each episode).
-
-### Difficulty Analysis
-
-| Task | Decision Depth | Info Asymmetry | Time Pressure | Optimal Steps |
-|------|---------------|----------------|---------------|---------------|
-| clean_deploy | Low (1) | None | None | 4–6 |
-| broken_pipeline | Medium (3) | Medium | Low | 8–12 |
-| judgment_call | High (5) | High | High | 5–8 |
-| cascading_failure | High (4) | High | Medium | 6–10 |
-| capacity_crisis | Medium (3) | Medium | Medium | 6–10 |
-| random_incident | Variable | Variable | Variable | 5–12 |
-
-## Example Episode Trajectory
-
-**Task: broken_pipeline** — diagnose and fix a broken deployment pipeline.
-
-```
-Step 1: view_logs("cache-service")       → reward +0.02  (investigation bonus, reveals Redis config error)
-Step 2: edit_config("cache-service",
-          redis.host → "redis-prod...")   → reward +0.10  (health improvement from fixing config)
-Step 3: deploy("api-gateway", "v2.3.1")  → reward +0.05  (staging verified)
-Step 4: deploy("api-gateway", "v2.3.1")  → reward +0.15  (promoted to production)
-Step 5: approve("All services healthy")  → reward +0.03  (episode complete)
-```
-
-## Environment Features
-
-- 6 tasks (5 hand-crafted + 1 procedurally generated) for curriculum learning
-- 5 microservices with realistic dependency graph
-- Stochastic simulation with seeded RNG for full reproducibility
-- Realistic production logs (Java/Node stack traces, timestamps, red herrings)
-- Partial observability (CPU/memory hidden until investigated via view_logs)
-- Cascading failures propagate through dependency chain each step
-- Cross-metric compounding (error → CPU → latency spirals, and reverse recovery)
-- Non-linear tipping points (CPU cliff at 85%, latency cliff at 2000ms)
-- Trade-off effects on every action (deploy → CPU spike, rollback → 25% regression risk, config edit → restart latency)
-- Time pressure on incident tasks (health degrades each step in judgment_call)
-- Multi-path task design (judgment_call has 3 valid resolution paths with different scores)
-- Dense per-step reward with anti-reward-hacking safeguards (bounded, no procedure bonuses)
-- Observation summary field for quick triage
-
-## Formal MDP Description
-
-| Property | Description |
-|----------|-------------|
-| **State space S** | 5 services × (health ∈ {healthy, degraded, down}, cpu ∈ [0,100], memory ∈ [0,100], error_rate ∈ [0,50], latency ∈ [0,5000], config: Dict) + pipeline status + migration status + alerts. Partially observable — CPU/memory/latency/error_rate hidden until investigated. |
-| **Action space A** | 9 discrete action types × parameterized service targets. ~45 effective actions. |
-| **Transition T** | Deterministic core with stochastic elements (8% transient staging failure, 25% rollback regression, deploy quality variance). Seeded RNG ensures reproducibility. |
-| **Reward R** | Dense, bounded [-0.35, +0.30] per step. Potential-based health delta + milestone rewards + exploration bonuses with diminishing returns. Task-adaptive urgency scaling (1.0×–1.5×). |
-| **Episode length** | 12–20 steps depending on task. Terminates on approve/abort/max_steps/catastrophic failure (health < 20%). |
-| **Discount factor** | Recommended γ = 0.99 (short episodes, dense rewards). |
-
-### Stochastic Elements (All Seeded)
-
-All randomness uses `random.Random(seed)` — same seed + same actions = identical outcomes.
-
-| Element | Probability | Location |
-|---------|------------|----------|
-| Transient staging failure | 8% per deploy | `deploy_to_staging()` |
-| Rollback regression | 25% per rollback | `rollback()` |
-| Deploy quality | 70% clean / 20% minor / 10% unstable | `deploy_to_production()` |
-| Compound incident | 30% in random_incident | `RandomIncidentScenario.setup()` |
-| Initial health variance | ±10 CPU, ±15 latency | `RandomIncidentScenario.setup()` |
-
-Determinism guarantee: `reset()` re-seeds the RNG from fixed task seeds. Two resets with the same task produce identical initial states.
-
-## Setup
+### As an evaluator (HF Space, no setup)
 
 ```bash
-# Install dependencies
-uv sync
-
-# Run locally (without Docker)
-uv run python -m uvicorn server.app:app --host 0.0.0.0 --port 8000
-
-# Build and run with Docker
-docker build -t devops-pipeline-gym .
-docker run -p 8000:8000 devops-pipeline-gym
-
-# Test reset endpoint
-curl -X POST -H "Content-Type: application/json" -d '{}' http://localhost:8000/reset
-
-# Open web UI
-# http://localhost:8000/web
-
-# Run inference
-export HF_TOKEN=your_token_here
-uv run inference.py
-
-# Validate and deploy
-openenv validate
-openenv push --repo-id yashash045/devops-pipeline-gym
+curl -s -X POST -H "Content-Type: application/json" -d '{}' \
+  https://yashash045-devops-pipeline-gym.hf.space/reset
 ```
 
-## API Endpoints
+`/health`, `/tasks`, `/baseline`, `/grader`, `/curriculum_progress` endpoints are all live on the Space.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/reset` | POST | Reset environment (new episode) |
-| `/step` | POST | Execute an action, returns observation |
-| `/state` | GET | Get current environment state |
-| `/tasks` | GET | List available tasks and action schema |
-| `/health` | GET | Health check |
-| `/baseline` | POST | Pre-recorded LLM baseline scores |
-| `/grader` | POST | Score the current active episode |
-| `/ws` | WS | WebSocket for persistent sessions |
-| `/web` | GET | Gradio web interface |
+### Locally (Docker)
+
+```bash
+git clone https://github.com/Yashash4/devops-pipeline-gym
+cd devops-pipeline-gym
+docker build -t devops-pipeline-gym .
+docker run -p 8000:8000 devops-pipeline-gym
+```
+
+### Train your own agent (T4 / H100)
+
+```bash
+pip install -e '.[training]'
+uvicorn server.app:app --host 0.0.0.0 --port 8000 &
+
+# Stage 1 — SFT warmup on 78 expert trajectories
+python training/sft_warmup.py \
+  --model unsloth/Qwen3-1.7B-bnb-4bit \
+  --trajectories data/sft_trajectories.jsonl \
+  --output-dir outputs/sft_warmup --epochs 2
+
+# Stage 2 — GRPO (200 steps, 8 generations per prompt)
+python training/grpo_train.py \
+  --model unsloth/Qwen3-1.7B-bnb-4bit \
+  --sft-adapter-path outputs/sft_warmup/final \
+  --env-url http://127.0.0.1:8000 \
+  --max-steps 200 --num-generations 8 \
+  --output-dir outputs/run1
+
+# Eval before/after
+python training/eval_baseline.py --model unsloth/Qwen3-1.7B-bnb-4bit \
+  --env-url http://127.0.0.1:8000 --output baseline.json --n-seeds 3
+python training/eval_baseline.py --model unsloth/Qwen3-1.7B-bnb-4bit \
+  --adapter-path outputs/run1/final \
+  --env-url http://127.0.0.1:8000 --output trained.json --n-seeds 3
+python training/generate_comparison_chart.py \
+  --baseline baseline.json --trained trained.json --output before_after.png
+```
+
+### Validate the env
+
+```bash
+python -m openenv.cli validate                 # local
+python -m openenv.cli validate --url https://yashash045-devops-pipeline-gym.hf.space  # remote
+```
+
+## Architecture Note
+
+We deliberately ship **zero external API dependencies** in the runtime path. No Groq, no OpenAI, no Anthropic, no Ollama. The env is pure Python + FastAPI + a deterministic simulator. This makes the training pipeline (a) reproducible end-to-end, (b) free for anyone to retrain, and (c) immune to upstream API changes that would break submissions. Inference uses the HF Inference Router (OpenAI-compatible) — but only at evaluation time, never inside the reward loop.
+
+The reward graders are deterministic Python code. Same trajectory → same score, every time. This is the property that makes the training loop both reproducible and plagiarism-check transparent.
+
+## Citation
+
+If you build on this work, please cite:
+
+> Team Tripod (Yashash, Gajanand, Likith). *DevOps Pipeline Gym: An OpenEnv RL environment for training decisions under uncertainty.* OpenEnv Hackathon Grand Finale 2026.
+
+## License
+
+Apache 2.0.
