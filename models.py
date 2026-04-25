@@ -176,12 +176,6 @@ class PipelineAction(Action):
         description="Round 2 — which role is taking this action. Default SRE so "
                     "old-style Round 1 actions still work.",
     )
-    handoff_notes: Optional[str] = Field(
-        default=None,
-        description="Round 2 — brief context/diagnosis passed to the next role. "
-                    "Scored for quality (service mention, diagnosis keywords, "
-                    "action suggestion).",
-    )
 
 
 # --- Observation (extends OpenEnv Observation) --------------------------------
@@ -230,8 +224,4 @@ class PipelineObservation(Observation):
     role_history: List[RoleHistoryEntry] = Field(
         default_factory=list,
         description="Round 2 — log of which role acted on which step.",
-    )
-    previous_handoff: Optional[str] = Field(
-        default=None,
-        description="Round 2 — hand-off notes from the previous role's action.",
     )
