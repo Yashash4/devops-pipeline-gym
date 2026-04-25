@@ -170,9 +170,26 @@ finally:
     except subprocess.TimeoutExpired:
         env_proc.kill()
 
-# Step 7: Push final adapter to Hub
-print("[7/7] Pushing GRPO-trained adapter to Hub...", flush=True)
+# Step 7: Push final adapter + logs to Hub
+print("[7/7] Pushing GRPO-trained adapter + training logs to Hub...", flush=True)
 from huggingface_hub import HfApi
+import shutil
+
+# Copy env_server.log + trainer.log into /workspace/grpo_output BEFORE upload,
+# so they ship with the adapter. Container is ephemeral; without this they
+# vanish when the job ends and judges have no preserved training evidence
+# (FAQ: "Evidence that you actually trained; at minimum, loss and reward
+# plots from a real run").
+logs_dir = "/workspace/grpo_output/logs"
+os.makedirs(logs_dir, exist_ok=True)
+for src_name, src_path in (("env_server.log", "/workspace/env_server.log"),
+                            ("trainer.log", "/workspace/trainer.log")):
+    if os.path.exists(src_path):
+        try:
+            shutil.copy2(src_path, os.path.join(logs_dir, src_name))
+            print(f"    Copied {src_name} ({os.path.getsize(src_path)} bytes)", flush=True)
+        except Exception as e:
+            print(f"    Could not copy {src_name}: {e}", flush=True)
 
 api = HfApi(token=os.environ["HF_TOKEN"])
 api.create_repo(
@@ -185,7 +202,7 @@ api.upload_folder(
     folder_path="/workspace/grpo_output",
     repo_id="yashash045/devops-pipeline-gym-trained",
     repo_type="model",
-    commit_message="Phase M Stage 2: GRPO 200 steps adapter",
+    commit_message="Phase M Stage 2: GRPO 200 steps adapter + training logs (logs/, grpo_log.csv, curriculum_progress.jsonl, reward_curve.png)",
 )
 
 print("\n=== Phase M Stage 2 COMPLETE ===", flush=True)

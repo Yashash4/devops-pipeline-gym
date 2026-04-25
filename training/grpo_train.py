@@ -709,13 +709,54 @@ def main():
         every_n_steps=10,
     )
 
+    # Per-step reward CSV logger — writes one row per logging_step with
+    # whatever metrics TRL exposes (loss, reward, reward_std, kl, lr, etc.)
+    # Mirrors kube-sre-gym's reward_log.csv pattern (Help Guide #19: judges
+    # value visible per-episode tabular evidence on the trained-adapter Hub).
+    import csv
+
+    class _RewardCSVCallback(TrainerCallback):
+        def __init__(self, csv_path: Path):
+            self.csv_path = csv_path
+            self.csv_path.parent.mkdir(parents=True, exist_ok=True)
+            self._fh = open(self.csv_path, "w", newline="", encoding="utf-8")
+            self._writer = None
+            self._fieldnames: list = []
+
+        def on_log(self, args_, state, control, logs=None, **_kwargs):
+            if not logs:
+                return
+            row = {"step": int(getattr(state, "global_step", 0)), **logs}
+            # Initialize header on first row using whatever keys TRL emitted
+            if self._writer is None:
+                self._fieldnames = list(row.keys())
+                self._writer = csv.DictWriter(self._fh, fieldnames=self._fieldnames)
+                self._writer.writeheader()
+            else:
+                # If TRL emits new keys later, extend gracefully
+                for k in row.keys():
+                    if k not in self._fieldnames:
+                        self._fieldnames.append(k)
+            # Write only known fields; ignore unexpected nested types
+            safe_row = {k: row.get(k, "") for k in self._fieldnames}
+            self._writer.writerow(safe_row)
+            self._fh.flush()
+
+        def on_train_end(self, args_, state, control, **_kwargs):
+            try:
+                self._fh.close()
+            except Exception:
+                pass
+
+    reward_csv_callback = _RewardCSVCallback(out_dir / "grpo_log.csv")
+
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
         reward_funcs=[reward_fn],
         args=grpo_config,
         train_dataset=dataset,
-        callbacks=[curriculum_callback],
+        callbacks=[curriculum_callback, reward_csv_callback],
     )
 
     # TRL 0.29.0 / vLLM 0.11.x logprobs format mismatch — TRL expects
