@@ -105,6 +105,10 @@ def build_prompt(obs: Dict[str, Any], role: str) -> str:
     # Avoid textwrap.dedent — it misbehaves when an interpolated multi-line
     # value (service_lines) has different leading whitespace than the f-string
     # template, producing mixed indents.
+    # ONE-LINE schema hint added (proof-run experiment): force config_edits
+    # shape because parser-coercion alone wasn't enough — clipped completions
+    # with malformed config_edits poisoned reward signal in the prior tiny run.
+    # Cost: ~30 chars OOD vs SFT (still ~98% match on prompt content).
     user = (
         f"ROLE: {role_desc}\n"
         f"\n"
@@ -118,6 +122,8 @@ def build_prompt(obs: Dict[str, Any], role: str) -> str:
         f"PREVIOUS HANDOFF NOTES: none\n"
         f"\n"
         f"AVAILABLE ACTIONS: {actions_str}\n"
+        f"\n"
+        f"FORMAT: config_edits (when present) must be a list of {{key, value}} objects.\n"
         f"\n"
         f"Respond with ONE JSON action."
     )
@@ -183,23 +189,47 @@ def parse_completion(text: str) -> Dict[str, Any]:
         data = json.loads(text[first : last + 1])
         if not isinstance(data, dict) or "action_type" not in data:
             return fallback
-        # Coerce config_edits dict -> list (model occasionally drops list wrapping).
-        # SFT data is 60/60 list-typed; pruning the in-prompt schema cue
-        # (commit c6c5f7f) caused some generations to emit a bare {"key", "value"}
-        # dict instead of [{"key", "value"}]. Pydantic's List[ConfigEdit] rejects
-        # non-list. This coercion preserves the model's underlying intent
-        # (the chosen key/value) so the gradient still rewards the right decision.
+        # Aggressively coerce config_edits to a valid List[ConfigEdit] or drop it.
+        # Pydantic List[ConfigEdit] rejects everything except list-of-{key,value}.
+        # Hardened to handle every shape we've observed the model emit:
+        #   list of {key,value}                -> pass through
+        #   list of single-key dicts {x: y}    -> [{key: x, value: y}, ...]
+        #   list of "x=y" strings              -> [{key: x, value: y}, ...]
+        #   {key, value} dict                  -> wrap in list
+        #   single-key dict {x: y}             -> [{key: x, value: y}]
+        #   multi-key dict {a: b, c: d}        -> [{key: a, value: b}, {key: c, value: d}]
+        #   "x=y" string                       -> [{key: x, value: y}]
+        #   bool, int, None, "", "none", etc.  -> drop the field
         ce = data.get("config_edits")
-        if isinstance(ce, dict) and {"key", "value"} <= set(ce.keys()):
-            data["config_edits"] = [ce]
-        elif isinstance(ce, dict) and len(ce) == 1:
-            k, v = next(iter(ce.items()))
-            data["config_edits"] = [{"key": k, "value": str(v)}]
-        elif isinstance(ce, str):
-            # Model sometimes emits "" or "none" instead of omitting the field
-            # Drop it — Pydantic Optional accepts missing field as None
+        coerced = None
+        if isinstance(ce, list):
+            new_items = []
+            for item in ce:
+                if isinstance(item, dict):
+                    if "key" in item and "value" in item:
+                        new_items.append({"key": str(item["key"]), "value": str(item["value"])})
+                    elif len(item) == 1:
+                        k, v = next(iter(item.items()))
+                        new_items.append({"key": str(k), "value": str(v)})
+                elif isinstance(item, str) and "=" in item:
+                    k, _, v = item.partition("=")
+                    new_items.append({"key": k.strip(), "value": v.strip()})
+            coerced = new_items if new_items else None
+        elif isinstance(ce, dict):
+            if "key" in ce and "value" in ce:
+                coerced = [{"key": str(ce["key"]), "value": str(ce["value"])}]
+            elif len(ce) == 1:
+                k, v = next(iter(ce.items()))
+                coerced = [{"key": str(k), "value": str(v)}]
+            elif len(ce) > 1:
+                coerced = [{"key": str(k), "value": str(v)} for k, v in ce.items()]
+        elif isinstance(ce, str) and "=" in ce:
+            k, _, v = ce.partition("=")
+            coerced = [{"key": k.strip(), "value": v.strip()}]
+        if coerced is not None:
+            data["config_edits"] = coerced
+        else:
             data.pop("config_edits", None)
-        # Lists pass through unchanged. None / missing also fine.
         # Normalise enum-valued fields to lowercase. Kaggle dry-run showed the
         # base model likes to emit "role": "SRE" / "DEV" / "OPS" (uppercase),
         # which Pydantic rejects — the Role enum values are lowercase ("sre",
