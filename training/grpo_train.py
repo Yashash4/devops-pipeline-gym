@@ -499,16 +499,17 @@ def main():
     if args.use_vllm:
         # Unsloth vLLM colocate path. fast_inference flips the model into a
         # vLLM-served generation backend; max_lora_rank must match the GRPO
-        # LoRA rank (16); gpu_memory_utilization leaves headroom on L4 (24GB).
+        # LoRA rank (16); gpu_memory_utilization at 0.4 leaves more headroom
+        # for the trainer's gradient offload (deadlocked at 0.6 on L4).
         # enforce_eager bypasses torch.compile, sidestepping the v0.19 graph
         # bug seen on Qwen3 (size_N nodes still have users at decompose-time).
         fpt_kwargs.update(
             fast_inference=True,
             max_lora_rank=16,
-            gpu_memory_utilization=0.6,
+            gpu_memory_utilization=0.4,
             enforce_eager=True,
         )
-        logger.info("vLLM colocate enabled (fast_inference=True, max_lora_rank=16, gpu_mem=0.6, enforce_eager=True)")
+        logger.info("vLLM colocate enabled (fast_inference=True, max_lora_rank=16, gpu_mem=0.4, enforce_eager=True)")
     model, tokenizer = FastLanguageModel.from_pretrained(**fpt_kwargs)
 
     # Phase 6.5 hotfix — load the SFT adapter as a FROZEN named prior and
@@ -659,7 +660,7 @@ def main():
         # In-process vLLM (no external server). Memory fraction must align
         # with FastLanguageModel.from_pretrained gpu_memory_utilization above.
         extras.append(("vllm_mode", "colocate"))
-        extras.append(("vllm_gpu_memory_utilization", 0.6))
+        extras.append(("vllm_gpu_memory_utilization", 0.4))
     for extra_key, extra_val in extras:
         try:
             _probe = GRPOConfig(**{**cfg_kwargs, extra_key: extra_val})

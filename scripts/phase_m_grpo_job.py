@@ -129,14 +129,14 @@ if not health_ok:
 
 try:
     # Step 5: Run GRPO training
-    print("[5/7] Running GRPO 100 steps from raw base + vLLM (single LoRA path)...", flush=True)
+    print("[5/7] Running GRPO 30 steps from raw base + vLLM (single LoRA, debug verbosity)...", flush=True)
     subprocess.run(
         [
             sys.executable, "training/grpo_train.py",
             "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
             "--sft-adapter-path", "none",
             "--env-url", "http://localhost:8000",
-            "--max-steps", "100",
+            "--max-steps", "30",
             "--batch-size", "4",
             "--num-generations", "8",
             "--learning-rate", "5e-6",
@@ -150,6 +150,7 @@ try:
             "TRACKIO_SPACE_ID": "yashash045/dpg-trackio",
             "TRACKIO_PROJECT": "devops-pipeline-gym-grpo",
             "VLLM_ENFORCE_EAGER": "1",
+            "VLLM_LOGGING_LEVEL": "DEBUG",
         },
     )
 finally:
