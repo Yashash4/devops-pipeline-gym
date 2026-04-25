@@ -8,3 +8,7 @@ outputs/
 dryrun/
 _*.log
 _*.err
+
+# Phase X1 trajectory cleanup backup (local-only safety net)
+data/*.bak
+data/sft_trajectories.jsonl.*.bak

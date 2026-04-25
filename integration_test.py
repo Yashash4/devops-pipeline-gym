@@ -965,6 +965,95 @@ report("Round 1 optimal score reproducible after Phase 5 (clean_deploy)",
 
 
 # ============================================================================
+# TEST 18: SFT dataset schema guardrail (Phase X2)
+# ----------------------------------------------------------------------------
+# Asserts data/sft_trajectories.jsonl matches v2 PipelineAction schema.
+# Specifically: NO handoff_notes (Phase B removed it from PipelineAction;
+# extra="forbid" on the parent Action class would reject any leftover at
+# GRPO time), AND every assistant action parses cleanly via
+# PipelineAction(**action_dict). Catches re-introduction by anyone who
+# adds new trajectories from the pre-cleanup template, BEFORE training
+# eats a silent-fallback episode.
+# ============================================================================
+print("\n=== TEST 18: SFT dataset schema guardrail ===", flush=True)
+
+import json as _json
+from pathlib import Path as _Path
+from devops_pipeline_gym.models import PipelineAction as _PipelineAction
+from pydantic import ValidationError as _ValidationError
+
+_SFT_PATH = _Path("data/sft_trajectories.jsonl")
+
+if _SFT_PATH.exists():
+    with open(_SFT_PATH, encoding="utf-8") as _f:
+        _lines = [_l for _l in _f if _l.strip() and not _l.lstrip().startswith("#")]
+
+    _record_count = 0
+    _asst_count = 0
+    _handoff_violations = []  # list of (line_num, msg_idx, action_dict)
+    _parse_violations = []    # list of (line_num, msg_idx, error_summary)
+
+    for _ln_idx, _line in enumerate(_lines, start=1):
+        try:
+            _rec = _json.loads(_line)
+        except _json.JSONDecodeError as _e:
+            _parse_violations.append((_ln_idx, -1, f"record-level: {_e}"))
+            continue
+        _record_count += 1
+
+        for _msg_idx, _msg in enumerate(_rec.get("messages", [])):
+            if _msg.get("role") != "assistant":
+                continue
+            _asst_count += 1
+            _content = _msg.get("content", "")
+
+            try:
+                _action_dict = _json.loads(_content)
+            except _json.JSONDecodeError as _e:
+                _parse_violations.append(
+                    (_ln_idx, _msg_idx, f"asst content not JSON: {_e}")
+                )
+                continue
+            if not isinstance(_action_dict, dict):
+                _parse_violations.append(
+                    (_ln_idx, _msg_idx, f"asst content not dict: {type(_action_dict).__name__}")
+                )
+                continue
+
+            if "handoff_notes" in _action_dict:
+                _handoff_violations.append((_ln_idx, _msg_idx, _action_dict))
+
+            try:
+                _PipelineAction(**_action_dict)
+            except _ValidationError as _e:
+                _err_summary = "; ".join(
+                    f"{(_e_ent.get('loc', ['?']) or ['?'])[0]}: {_e_ent.get('msg', 'err')}"
+                    for _e_ent in _e.errors()[:3]
+                )
+                _parse_violations.append(
+                    (_ln_idx, _msg_idx, f"PipelineAction validation: {_err_summary}")
+                )
+
+    report(
+        "SFT dataset: no handoff_notes in assistant actions",
+        len(_handoff_violations) == 0,
+        f"records={_record_count}, asst_msgs={_asst_count}, "
+        f"violations={len(_handoff_violations)} (first 3: {_handoff_violations[:3]})",
+    )
+    report(
+        "SFT dataset: all assistant actions parse into PipelineAction",
+        len(_parse_violations) == 0,
+        f"records={_record_count}, asst_msgs={_asst_count}, "
+        f"violations={len(_parse_violations)} (first 3: {_parse_violations[:3]})",
+    )
+else:
+    report_skip(
+        "SFT dataset guardrail",
+        f"{_SFT_PATH} not present — skipping (not a regression)",
+    )
+
+
+# ============================================================================
 # SUMMARY
 # ============================================================================
 print("\n" + "=" * 70, flush=True)
