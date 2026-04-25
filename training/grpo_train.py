@@ -204,6 +204,7 @@ def parse_completion(text: str) -> Dict[str, Any]:
         for key in ("role", "action_type"):
             if isinstance(data.get(key), str):
                 data[key] = data[key].lower()
+        logger.warning(f"DEBUG parse_completion data: {data!r}")
         return data
     except Exception:
         return fallback
