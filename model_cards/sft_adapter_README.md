@@ -31,18 +31,19 @@ The environment simulates production incident response across 5 microservices in
 
 Trained on **80 expert trajectories** for 2 epochs on a free Kaggle T4 (~30 minutes wall clock). 17.4M trainable parameters (1.69% of base). QLoRA configuration: `r=16, alpha=32, dropout=0.05`, applied to all attention + MLP modules.
 
-The hero result: **a 1.7B model trained on 80 trajectories outperforms 70B-700B frontier models** on the same six tasks. Frontier baselines (n=3 seeds × 6 tasks) tested via HF Inference Router:
+The hero result: **a 1.7B model trained on 80 trajectories outperforms 70B-700B frontier models** on the same `judgment_call` task. Same task, same seed family, same prompt format, same scoring rubric. Frontier baselines hit through HF Inference Router (n=3 seeds averaged for frontier, single-seed for our trained model and the 7B notebook baseline):
 
-| Model | Size | Mean reward | Success rate |
+| Model | Size | Reward on `judgment_call` | Δ ours beats |
 |---|---|---:|---:|
-| Qwen2.5-72B-Instruct | 72B | -1.240 | 0% |
-| GPT-OSS-120B | 120B MoE | -1.335 | 0% |
-| DeepSeek-V3.1 | 671B MoE | -1.580 | 0% |
-| Mistral-Large-Instruct-2411 | 123B | -1.580 | 0% |
-| Llama-3.3-70B-Instruct | 70B | -1.696 | 5.5% |
-| **Qwen3-1.7B + this SFT adapter (single-seed `judgment_call`)** | **1.7B** | **-0.044** | 0% |
+| Llama-3.3-70B-Instruct (untrained) | 70B | -1.815 | **+1.771** |
+| DeepSeek-V3.1 (untrained) | 671B MoE | -1.580 | **+1.536** |
+| Mistral-Large-Instruct-2411 (untrained) | 123B | -1.580 | **+1.536** |
+| Qwen2.5-72B-Instruct (untrained) | 72B | -1.232 | **+1.188** |
+| GPT-OSS-120B (untrained) | 120B MoE | -1.201 | **+1.157** |
+| Qwen2.5-7B-Instruct (untrained, baseline in notebook) | 7B | -1.200 | **+1.156** |
+| **Qwen3-1.7B + this SFT adapter (TRAINED)** | **1.7B** | **-0.044** | — |
 
-On `judgment_call` at seed `5003`, our trained 1.7B (this adapter) gets `-0.044`. The closest-size untrained baseline we ran in the demo notebook is Qwen2.5-7B-Instruct via HF Router: `-1.200`. **+1.156 reward delta — trained 1.7B beats untrained 7B**. We also beat every untrained 70B-700B frontier model in the table above by `+1.16` to `+1.77`.
+A 1.7B model trained on 80 expert trajectories beats every untrained model we tested — from a 7B same-family Qwen baseline to the 671B DeepSeek-V3.1 — by **+1.16 to +1.77 reward** on this task. We did not run untrained Qwen3-1.7B as a same-family baseline within budget; the 7B Qwen2.5 row is the closest-size untrained model the demo notebook actually invokes via HF Router.
 
 Frontier models default to either immediate `abort` (DeepSeek, Mistral all return -1.580 across all tasks) or attempted-but-failed action sequences. None succeed at the task without env-specific training. The trained 1.7B knows to investigate first, identify root cause, deploy carefully, and approve only when healthy.
 

@@ -123,7 +123,6 @@ def build_prompt(obs: Dict[str, Any], role: str) -> str:
         f"{service_lines}\n"
         f"\n"
         f"LAST ACTION RESULT: {last_result}\n"
-        f"PREVIOUS HANDOFF NOTES: none\n"
         f"\n"
         f"AVAILABLE ACTIONS: {actions_str}\n"
         f"\n"

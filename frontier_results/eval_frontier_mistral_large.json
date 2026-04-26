@@ -1,0 +1,697 @@
+{
+  "model": "mistralai/Mistral-Large-Instruct-2411",
+  "tasks": {
+    "clean_deploy": {
+      "seed_0": {
+        "task": "clean_deploy",
+        "seed_offset": 0,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_1": {
+        "task": "clean_deploy",
+        "seed_offset": 1,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_2": {
+        "task": "clean_deploy",
+        "seed_offset": 2,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      }
+    },
+    "broken_pipeline": {
+      "seed_0": {
+        "task": "broken_pipeline",
+        "seed_offset": 0,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_1": {
+        "task": "broken_pipeline",
+        "seed_offset": 1,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_2": {
+        "task": "broken_pipeline",
+        "seed_offset": 2,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      }
+    },
+    "judgment_call": {
+      "seed_0": {
+        "task": "judgment_call",
+        "seed_offset": 0,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_1": {
+        "task": "judgment_call",
+        "seed_offset": 1,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_2": {
+        "task": "judgment_call",
+        "seed_offset": 2,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      }
+    },
+    "cascading_failure": {
+      "seed_0": {
+        "task": "cascading_failure",
+        "seed_offset": 0,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_1": {
+        "task": "cascading_failure",
+        "seed_offset": 1,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_2": {
+        "task": "cascading_failure",
+        "seed_offset": 2,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      }
+    },
+    "capacity_crisis": {
+      "seed_0": {
+        "task": "capacity_crisis",
+        "seed_offset": 0,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_1": {
+        "task": "capacity_crisis",
+        "seed_offset": 1,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_2": {
+        "task": "capacity_crisis",
+        "seed_offset": 2,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      }
+    },
+    "random_incident": {
+      "seed_0": {
+        "task": "random_incident",
+        "seed_offset": 0,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_1": {
+        "task": "random_incident",
+        "seed_offset": 1,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      },
+      "seed_2": {
+        "task": "random_incident",
+        "seed_offset": 2,
+        "steps": 15,
+        "reward_sum": -1.58,
+        "rewards_per_step": [
+          0.04,
+          0.01,
+          0.01,
+          0.01,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15,
+          -0.15
+        ],
+        "roles_used": [
+          "ops",
+          "sre"
+        ],
+        "num_roles_used": 2,
+        "all_3_modes_used": false,
+        "done": true,
+        "success": false,
+        "healthy_ratio": 1.0,
+        "steps_to_recovery": 0,
+        "initial_health": 100.0
+      }
+    }
+  },
+  "summary": {
+    "clean_deploy": {
+      "avg_reward": -1.58,
+      "std_reward": 0.0,
+      "avg_steps": 15,
+      "avg_roles_used": 2,
+      "success_rate": 0,
+      "all_3_modes_hit_rate": 0,
+      "avg_steps_to_recovery": 0.0,
+      "recovery_episodes_count": 0,
+      "n": 3
+    },
+    "broken_pipeline": {
+      "avg_reward": -1.58,
+      "std_reward": 0.0,
+      "avg_steps": 15,
+      "avg_roles_used": 2,
+      "success_rate": 0,
+      "all_3_modes_hit_rate": 0,
+      "avg_steps_to_recovery": 0.0,
+      "recovery_episodes_count": 0,
+      "n": 3
+    },
+    "judgment_call": {
+      "avg_reward": -1.58,
+      "std_reward": 0.0,
+      "avg_steps": 15,
+      "avg_roles_used": 2,
+      "success_rate": 0,
+      "all_3_modes_hit_rate": 0,
+      "avg_steps_to_recovery": 0.0,
+      "recovery_episodes_count": 0,
+      "n": 3
+    },
+    "cascading_failure": {
+      "avg_reward": -1.58,
+      "std_reward": 0.0,
+      "avg_steps": 15,
+      "avg_roles_used": 2,
+      "success_rate": 0,
+      "all_3_modes_hit_rate": 0,
+      "avg_steps_to_recovery": 0.0,
+      "recovery_episodes_count": 0,
+      "n": 3
+    },
+    "capacity_crisis": {
+      "avg_reward": -1.58,
+      "std_reward": 0.0,
+      "avg_steps": 15,
+      "avg_roles_used": 2,
+      "success_rate": 0,
+      "all_3_modes_hit_rate": 0,
+      "avg_steps_to_recovery": 0.0,
+      "recovery_episodes_count": 0,
+      "n": 3
+    },
+    "random_incident": {
+      "avg_reward": -1.58,
+      "std_reward": 0.0,
+      "avg_steps": 15,
+      "avg_roles_used": 2,
+      "success_rate": 0,
+      "all_3_modes_hit_rate": 0,
+      "avg_steps_to_recovery": 0.0,
+      "recovery_episodes_count": 0,
+      "n": 3
+    }
+  }
+}

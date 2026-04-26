@@ -10,7 +10,7 @@ Interactive Gradio demo: "Play as the on-call engineer."
 A human operator drives the DevOps Pipeline environment by hand. Mirrors what
 the trained policy sees: same observations, same role gating, same reward
 signal. Connects to the FastAPI env via ``DevopsPipelineEnv`` (sticky-session
-sync client) so judges can compare their own intuition against the +3.225
+sync client) so judges can compare their own intuition against the +1.156
 delta our trained adapter achieves.
 
 Launch:
