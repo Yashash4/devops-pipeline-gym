@@ -728,6 +728,39 @@ def main():
         except Exception as e:
             logger.warning("enable_adapter_layers() failed: %s", e)
 
+    # Compat shim for Unsloth-patched GRPOTrainer.
+    # When `from unsloth import ...` runs anywhere, Unsloth monkey-patches
+    # TRL's GRPOTrainer into its own UnslothGRPOTrainer (saved to
+    # unsloth_compiled_cache/). The patched trainer calls
+    # model.for_training() and model.for_inference() — Unsloth-specific
+    # methods that pure-HF models don't have. Add no-op shims so the
+    # patched trainer doesn't crash with AttributeError.
+    if no_unsloth:
+        import types as _types
+
+        def _ufm_for_training(self, *args, **kwargs):
+            self.train()
+            return self
+
+        def _ufm_for_inference(self, *args, **kwargs):
+            self.eval()
+            return self
+
+        # Patch the outermost model and walk down to be safe (PEFT's
+        # __getattr__ falls through to base_model.model, but explicit
+        # patching at multiple levels avoids surprises).
+        targets = [model]
+        if hasattr(model, "base_model"):
+            targets.append(model.base_model)
+            if hasattr(model.base_model, "model"):
+                targets.append(model.base_model.model)
+        for t in targets:
+            if not hasattr(t, "for_training"):
+                t.for_training = _types.MethodType(_ufm_for_training, t)
+            if not hasattr(t, "for_inference"):
+                t.for_inference = _types.MethodType(_ufm_for_inference, t)
+        logger.info("Patched %d model levels with for_training/for_inference shims", len(targets))
+
     # Forward-pass smoke test: catch the "no grad_fn" bug BEFORE trainer.train()
     # so we crash with a clear message rather than 2 minutes into the loop.
     try:
