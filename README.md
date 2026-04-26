@@ -110,7 +110,7 @@ Plus structural penalties: broken-healthy `−0.30`, repeated investigation `−
 
 ## Results
 
-We trained Qwen3-1.7B-bnb-4bit on 30 expert trajectories via SFT, then explored RL refinement via GRPO. The SFT-only adapter is the headline result; GRPO is shipped as supporting evidence that the training pipeline is end-to-end functional.
+We trained Qwen3-1.7B-bnb-4bit on 80 expert trajectories via SFT, then explored RL refinement via GRPO. The SFT-only adapter is the headline result; GRPO is shipped as supporting evidence that the training pipeline is end-to-end functional.
 
 ### Headline: SFT delta on `judgment_call` (seed 3003)
 
@@ -119,7 +119,7 @@ We trained Qwen3-1.7B-bnb-4bit on 30 expert trajectories via SFT, then explored 
 | Untrained baseline (Qwen2.5-7B-Instruct via HF Router) | **−1.070** | 12 | False | — |
 | **+ SFT LoRA on Qwen3-1.7B-bnb-4bit** ([yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter)) | **+2.155** | 10 | **True** | **+3.225** |
 
-Same env, same seed (3003), same prompt format. SFT was 2 epochs on 30 trajectories (~30 min on T4), 17M trainable params (1.69% of base), QLoRA r=16 α=32 across all attn + MLP modules per Daniel-Unsloth-recommended settings.
+Same env, same seed (3003), same prompt format. SFT was 2 epochs on 80 trajectories (~30 min on T4), 17M trainable params (1.69% of base), QLoRA r=16 α=32 across all attn + MLP modules per Daniel-Unsloth-recommended settings.
 
 **What the trained agent learned** (full 10-step rollout, captured live):
 
