@@ -3,9 +3,12 @@
 # dependencies = [
 #     "torch>=2.4",
 #     "unsloth",
-#     "vllm>=0.6.0",
+#     # NO vllm pin — we're not using vLLM (proof-run path), and TRL 0.29
+#     # requires vllm==0.10.2 specifically (cannot import GuidedDecodingParams
+#     # from newer vllm). Letting UV pull only what TRL needs OR letting
+#     # vllm be absent (TRL has try/except for that case).
 #     "trl>=0.12",
-#     "peft>=0.13",
+#     "peft>=0.18.0,<0.19",
 #     "datasets>=3.0",
 #     "bitsandbytes>=0.43",
 #     "huggingface_hub>=0.30",
