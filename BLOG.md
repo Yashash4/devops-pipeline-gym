@@ -37,36 +37,54 @@ Frontier LLMs know the words for incident response. Ask Qwen2.5-72B what to do w
 
 ## The Environment
 
-```mermaid
-flowchart TD
-    A["Agent (LLM policy)<br/>Qwen3-1.7B SFT+GRPO"]:::agent
-    A -- "PipelineAction(role, action_type, ...)" --> H["HTTP POST /step<br/>FastAPI / OpenEnv server"]:::http
-    H --> R{"Role Router<br/>state-driven gate"}:::router
-    R -- DEV --> RDEV["DEV<br/>view_config<br/>edit_config<br/>run_migration"]:::dev
-    R -- SRE --> RSRE["SRE<br/>view_logs<br/>view_pipeline"]:::sre
-    R -- OPS --> ROPS["OPS<br/>deploy / rollback<br/>approve / abort"]:::ops
-    R -. "role mismatch -0.15<br/>bad action -0.10" .-> PEN["No-op penalty"]:::penalty
-    RDEV --> ENV
-    RSRE --> ENV
-    ROPS --> ENV
-    PEN --> OBS
-    ENV["PipelineEnvironment<br/>6 tasks + Curriculum<br/>seeded _rng (deterministic)"]:::env --> DEP
-    DEP["5-microservice dependency graph<br/>database &rarr; auth &rarr; api-gateway &rarr; web<br/>database &rarr; cache"]:::deps --> REW
-    REW["6 deterministic reward components<br/>bounded [-0.40, +0.32]"]:::reward --> OBS
-    OBS["PipelineObservation"]:::obs --> A
-
-    classDef agent  fill:#1f2937,stroke:#9ca3af,color:#f9fafb
-    classDef http   fill:#374151,stroke:#9ca3af,color:#f9fafb
-    classDef router fill:#4b5563,stroke:#d1d5db,color:#f9fafb
-    classDef dev    fill:#1d4ed8,stroke:#1e3a8a,color:#ffffff
-    classDef sre    fill:#15803d,stroke:#14532d,color:#ffffff
-    classDef ops    fill:#c2410c,stroke:#7c2d12,color:#ffffff
-    classDef penalty fill:#7f1d1d,stroke:#450a0a,color:#fecaca
-    classDef env    fill:#0f172a,stroke:#475569,color:#f8fafc
-    classDef deps   fill:#312e81,stroke:#1e1b4b,color:#e0e7ff
-    classDef reward fill:#7c2d12,stroke:#431407,color:#fed7aa
-    classDef obs    fill:#374151,stroke:#9ca3af,color:#f9fafb
+```text
++------------------------------------------------------------------------+
+|                         Agent (LLM policy)                             |
+|  Qwen3-1.7B (SFT + GRPO)  /  Qwen2.5-72B (baseline via HF Router)      |
++----------------------------------+-------------------------------------+
+                                   | PipelineAction(role, action_type,
+                                   |   service_name, target_version,
+                                   |   config_edits, migration_name, ...)
+                                   v
+                       HTTP POST /step  (FastAPI, OpenEnv server)
+                                   |
+                                   v
+                +--------------------------------------+
+                |  Role Router  (state-driven gate)    |
+                |  DEV: view/edit_config, run_migration|
+                |  SRE: view_logs, view_pipeline       |
+                |  OPS: deploy, rollback, approve, abort|
+                |  mismatch -> -0.15 (no-op)           |
+                |  bad-role-action -> -0.10 (no-op)    |
+                +------------------+-------------------+
+                                   v
+                +--------------------------------------+
+                |  PipelineEnvironment  (engine)       |
+                |   * 6 tasks + CurriculumController   |
+                |   * 5 microservices (dep graph):     |
+                |       database-primary --> auth      |
+                |       auth --> api-gateway           |
+                |       api-gateway --> web-frontend   |
+                |       database-primary --> cache     |
+                |   * deterministic _rng (seeded)      |
+                +------------------+-------------------+
+                                   v
+                +--------------------------------------+
+                |  Reward fn (6 components, bounded)   |
+                |  health-delta | deploy-progress |    |
+                |  broke-healthy | sub-goals |         |
+                |  investigation | role-alignment      |
+                |  -> bound_step_reward [-0.40, +0.32] |
+                +------------------+-------------------+
+                                   v
+              PipelineObservation(services, alerts, current_role,
+                role_history, pipeline, summary, reward, done)
+                                   |
+                                   v
+                          Agent (next step)
 ```
+
+Rendered mermaid version of the same flow lives in [`docs/architecture.md`](docs/architecture.md).
 
 Five microservices sit in a dependency graph. A primary database feeds an auth service, which feeds an API gateway, which feeds a web frontend. A cache service hangs off the database too. **Nine actions** split across **three roles**:
 
