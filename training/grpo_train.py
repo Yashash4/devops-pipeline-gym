@@ -22,6 +22,40 @@ Usage:
 
 from __future__ import annotations
 
+# ─── mergekit stub (MUST run before TRL import) ─────────────────────────────
+# TRL 0.29's trainer/callbacks.py top-level imports mergekit_utils, which
+# top-level imports `from mergekit.config import MergeConfiguration`. The
+# real mergekit package pins pydantic<=2.10, but openenv-core[core]>=0.2.2
+# requires pydantic>=2.11.7 (via fastmcp), so the two can't co-install.
+# We never use mergekit features (no model merging in our training loop),
+# so a stub that satisfies any attribute access is safe. __getattr__ on the
+# module returns a no-op class for any name.
+import sys as _sys
+import types as _types
+
+
+class _StubMergekitModule(_types.ModuleType):
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        cls = type(name, (), {"__init__": lambda self, *a, **kw: None})
+        setattr(self, name, cls)
+        return cls
+
+
+for _mod_name in (
+    "mergekit",
+    "mergekit.config",
+    "mergekit.merge",
+    "mergekit.architecture",
+    "mergekit.io",
+    "mergekit.options",
+):
+    if _mod_name not in _sys.modules:
+        _sys.modules[_mod_name] = _StubMergekitModule(_mod_name)
+
+# ────────────────────────────────────────────────────────────────────────────
+
 import argparse
 import json
 import logging

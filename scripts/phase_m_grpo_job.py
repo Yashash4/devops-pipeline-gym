@@ -10,10 +10,12 @@
 #     # from newer vllm). Letting UV pull only what TRL needs OR letting
 #     # vllm be absent (TRL has try/except for that case).
 #     "trl>=0.12",
-#     # mergekit: TRL 0.29 trainer/callbacks.py unconditionally imports
-#     # mergekit_utils which top-level imports mergekit. Without it
-#     # GRPOTrainer fails to import. Adding the dep makes TRL importable.
-#     "mergekit",
+#     # mergekit NOT in deps — its pydantic<=2.10 pin conflicts with
+#     # openenv-core's pydantic>=2.11.7 (via fastmcp). Instead we inject
+#     # a stub mergekit module into sys.modules at the top of
+#     # training/grpo_train.py BEFORE the trl import runs. TRL 0.29's
+#     # callbacks.py unconditionally imports mergekit_utils -> mergekit;
+#     # the stub satisfies the import without us actually installing it.
 #     "peft>=0.18.0,<0.19",
 #     "datasets>=3.0",
 #     "bitsandbytes>=0.43",
