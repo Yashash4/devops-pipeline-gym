@@ -12,7 +12,6 @@ tags:
 ---
 
 # DevOps Pipeline Gym
-*A deterministic, no-LLM-judge OpenEnv environment for training LLMs to make production-critical decisions under uncertainty — with role-rotated single-policy coordination across DEV / SRE / OPS.*
 
 [![HF Space](https://img.shields.io/badge/%F0%9F%A4%97%20Env%20Space-devops--pipeline--gym-blue)](https://huggingface.co/spaces/yashash045/devops-pipeline-gym)
 [![Gradio Demo](https://img.shields.io/badge/%F0%9F%A4%97%20Play%20as%20agent-Gradio%20demo-yellow)](https://huggingface.co/spaces/yashash045/devops-pipeline-demo)
@@ -23,37 +22,39 @@ tags:
 
 ## TL;DR
 
-A deterministic, Docker-only OpenEnv environment for DevOps incident response. We trained Qwen3-1.7B with SFT on 80 expert trajectories, and the 1.7B trained model beats untrained 70B+ frontier giants on the same six tasks. No LLM in the reward loop. Reproducible from a Colab badge in fifteen minutes.
+A 1.7B model that beats untrained 671B DeepSeek-V3.1 by +1.54 reward on incident sequencing, trained for free in thirty minutes on a Colab T4. Reward is plain Python. No judge LLM in the loop. The previous winner of this format used a live GKE cluster, an H100, and an LLM judge. We use a Python file and a free T4.
+
+**Themes targeted.** Primary: #4 Self-Improvement (procedural seed variation as adaptive curriculum). Secondary: #2 Long-Horizon Planning, #3.1 Professional Tasks.
 
 ## Why It Matters
 
-Incident response is sequencing, not knowledge. Frontier LLMs already know connection pools, migration locks, and circuit breakers — fluently. What they do not reliably do is *check* before changing anything, notice that the database they are about to restart is the upstream cause of the auth symptom, or pick rollback over hotfix when the deploy window is closing. That gap is a decision skill, and it has to be trained. This environment trains it.
+Incident response is mostly about sequencing. Knowledge is the easy part. Frontier LLMs already know connection pools, migration locks, and circuit breakers. They explain them well. Where they fall down is checking before they change anything. auth 500s look like an auth bug; it's actually a primary DB connection-pool saturation. The model has to read the database logs before it touches auth. They will restart the database without noticing the database is the upstream cause of the auth symptom. They will hotfix when the deploy window is closing instead of rolling back. That is a decision skill. You have to train it. This environment is built for that.
 
 ## Design Principles
 
-Five choices define how this env trains agents:
+Five choices shape how this env trains agents:
 
-1. **Deterministic Python rewards.** No LLM judge in the loop. Same trajectory in, same score out, every time. This is what makes the gradient surface stable enough to train against and trivial to plagiarism-check.
+1. **Deterministic Python rewards.** No LLM judge in the loop. Same trajectory in, same score out, every time. The gradient surface stays stable enough to train against. It is also trivial to plagiarism-check.
 
-2. **Pure-Python simulator.** No live cluster, no cloud credentials, no paid APIs. Runs in Docker on any laptop or HF Space; the only external call we ever make is at evaluation time, never inside the reward loop.
+2. **Pure-Python simulator.** No live cluster, no cloud credentials, no paid APIs. Runs in Docker on any laptop or HF Space. The only external call happens at evaluation time, never inside the reward loop.
 
-3. **Role-rotated single policy.** One model learns to act in three professional roles — DEV, SRE, OPS — with the role changing between steps. Acting outside your role costs reward and is silently dropped, modelling real on-call handoff dynamics without requiring multi-agent infrastructure.
+3. **Role-rotated single policy.** One model learns to act as DEV, SRE, and OPS, and the role changes between steps. Acting outside your role costs reward and the action is silently dropped. This models real on-call handoff dynamics without needing multi-agent infrastructure.
 
 4. **Six bounded reward components.** Each step's reward sums six outcome-based signals (deploy success, staging verification, config fix, migration, alert resolution, role alignment), bounded to `[-0.40, +0.32]`. Terminal bonuses fire only at episode end: `+2.0` for a clean `approve`, `-1.5` for a forced `abort`.
 
-5. **Procedural variation that prevents memorisation.** The `random_incident` task generates 40+ distinct scenarios per seed (5 failure types × 4 services × 2 severities). Eval seeds for this task (5000+) never overlap with training seeds (6000+). Generalisation, not memorisation.
+5. **Procedural variation that prevents memorisation.** The `random_incident` task generates 40+ distinct scenarios per seed (5 failure types × 4 services × 2 severities). Eval seeds for this task (5000+) never overlap with training seeds (6000+). The agent has to actually generalise.
 
-The trade we make: some real-cluster fidelity for full reproducibility. A judge can pull this env, hit `/reset`, and recover the exact reward numbers reported below — without provisioning anything.
+The trade-off: we give up some live-cluster behaviour to get full reproducibility. A judge can pull this env, hit `/reset`, and recover the exact reward numbers below without provisioning anything.
 
 ## Environment Design
 
-Five microservices in a dependency graph: a primary database feeds an auth service, which feeds an API gateway, which feeds a web frontend. A cache service hangs off the database too. Nine actions are split across three roles — DEV edits configs and runs migrations, SRE inspects logs and pipelines, OPS deploys, rolls back, approves and aborts. Acting outside your role costs reward and the action is dropped on the floor; the role rotates between steps the way a real on-call handoff would.
+Five microservices sit in a dependency graph. A primary database feeds an auth service. Auth feeds an API gateway. The gateway feeds a web frontend. A cache service hangs off the database too. Nine actions are split across three roles: DEV (edit configs, run migrations), SRE (read logs and pipeline state), and OPS, who is the only role allowed to deploy, rollback, approve, or abort. Acting outside your role costs reward and the action is dropped on the floor. The role rotates between steps the way a real on-call handoff would.
 
 Health is partial. Until you `view_logs` or `view_config` on a service, you cannot see CPU, latency, or error rate, and a degraded service shows up as `unknown`. You can deploy blind. We just charge you for it.
 
 Six tasks ship: `clean_deploy` (easy), `broken_pipeline` (medium), `judgment_call` (hard, three valid resolutions), `cascading_failure` (root cause hides behind symptoms), `capacity_crisis` (proactive scaling), and `random_incident` (procedurally generated from forty-plus seed combinations so the agent cannot memorize an answer).
 
-The reward is six deterministic Python components — health delta, deploy progress, broke-healthy penalty, sub-goal bonuses (config-fix, migration, alert-resolved), investigation decay, and a single role-alignment signal. Bounded `[-0.40, +0.32]` per step. Terminal `approve` while all-healthy pays `+2.0`, `abort` pays `-1.5`. Source: [`server/rewards.py`](server/rewards.py). No LLM judge anywhere in the loop.
+The reward has six deterministic Python components: health delta, deploy progress, broke-healthy penalty, sub-goal bonuses (config-fix, migration, alert-resolved), investigation decay, and a single role-alignment signal. Bounded `[-0.40, +0.32]` per step. Terminal `approve` while all-healthy pays `+2.0`, `abort` pays `-1.5`. Source: [`server/rewards.py`](server/rewards.py). No LLM judge anywhere in the loop.
 
 ## Architecture
 
@@ -101,7 +102,7 @@ Full diagram (with ASCII fallback) lives in [`docs/architecture.md`](docs/archit
 
 ### Headline result table
 
-Same task (`judgment_call`), same seed (5003), same prompt format. Baselines hit through HF Inference Router (n=3 seeds averaged per frontier model, single-seed for the 7B baseline shown live in the notebook). Our trained model is **single-seed (5003)** Qwen3-1.7B-bnb-4bit + SFT LoRA on the Colab T4.
+Same task (`judgment_call`), same seed (5003), same prompt format. Methodology details in the footnote below the table.
 
 | Model | Size | Reward on `judgment_call` | Δ ours beats |
 |---|---|---:|---:|
@@ -111,33 +112,34 @@ Same task (`judgment_call`), same seed (5003), same prompt format. Baselines hit
 | Qwen2.5-72B-Instruct (untrained) | 72B | −1.232 | **+1.188** |
 | Qwen2.5-7B-Instruct (untrained, baseline in notebook) | 7B | −1.200 | **+1.156** |
 | GPT-OSS-120B (untrained) | 120B MoE | −1.201 | **+1.157** |
-| **Qwen3-1.7B + SFT (ours, TRAINED)** | **1.7B** | **−0.044** | — |
+| **Qwen3-1.7B + SFT (ours, TRAINED)** | **1.7B** | **−0.044** | (ours) |
 
-**Headline:** A 1.7B model trained on 80 expert trajectories beats every untrained model we tested — from a 7B same-family Qwen baseline to the 671B DeepSeek-V3.1 — by **+1.16 to +1.77 reward** on this task. Same env, same prompt, same scoring rubric.
-
-**Methodology note:** We did not run untrained Qwen3-1.7B as a same-family baseline within budget; the 7B Qwen2.5 row is what the demo notebook actually invokes via HF Router. The 70B+ untrained baselines establish the upper-frontier ceiling that the trained 1.7B clears.
+**Headline:** A 1.7B model trained on 80 expert trajectories beats every untrained model from 7B to 671B on `judgment_call` (seed 5003). That includes the 7B same-family Qwen baseline and the 671B DeepSeek-V3.1. The margin is **+1.16 to +1.77 reward**. Same env, same prompt, same scoring rubric.
 
 Adapter: [yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter). SFT was 2 epochs on 80 expert trajectories, ~30 min on T4, QLoRA r=16 α=32 on all attention + MLP modules.
 
+<sub>Footnote on methodology: trained model row is single-seed (5003) on Colab T4. Frontier baselines are n=3 averaged via HF Inference Router. The trained number is therefore a conservative lower bound on the gap. An untrained Qwen3-1.7B same-family baseline was outside our compute budget. The 7B Qwen2.5 row is what the demo notebook actually invokes via HF Router. The 70B+ untrained baselines set the upper ceiling that the trained 1.7B clears.</sub>
+
 ## GRPO Refinement
 
-We ran GRPO for 200 steps on top of SFT on an L40S to push for additional gain. The training infra is healthy — loss flows (final ~6e-6), KL stays bounded (~0.0006), grad_norm stays alive (~0.0004 to 0.5), the trainer runs cleanly — but mean reward held near +0.04 with `clipped_ratio` near 1.0, meaning every generation hits the completion-length cap rather than emitting a clean stop. Our read: per-step reward is bounded to ±0.32, most policy improvement is concentrated in the terminal +2.0 for a clean `approve`, and over a 12-step horizon too few rollouts touch that bonus to differentiate the group. The gradient is starved, not noisy. SFT remains the dominant local optimum here. Full diagnosis in [BLOG.md](BLOG.md).
+GRPO ran clean for 200 steps and surfaced a length-cap saturation finding. SFT owns the headline. GRPO is in the BLOG post-mortem. The training infra was healthy on an L40S. Loss flowed (final ~6e-6), KL stayed bounded (~0.0006), grad_norm stayed alive (~0.0004 to 0.5), the trainer ran cleanly. Mean reward held near +0.04 with `clipped_ratio` near 1.0. That means every generation hit the completion-length cap instead of emitting a clean stop. Our read: per-step reward is bounded to ±0.32, so most of the available policy improvement lives in the terminal +2.0 for a clean `approve`. Over a 12-step horizon, too few rollouts ever touch that bonus to differentiate the group. The gradient is starved rather than noisy. SFT stays the dominant local optimum here. Full diagnosis in [BLOG.md](BLOG.md).
 
 ![GRPO reward + loss curves](outputs/grpo_run1/reward_curve.png)
 
 Full per-step training metrics (loss, reward, KL, entropy, grad_norm) live in [`trainer_state.json`](https://huggingface.co/yashash045/devops-pipeline-gym-trained/tree/main) on the trained adapter repo.
 
-## Reproduce in 90 Seconds
+## Reproduce three ways
 
 Pick one:
 
 ```bash
-# 1. Hit the live Space
+# 1. Colab (15 min, free T4, reproduces the headline number)
+#    Open the Colab badge above, set HF_TOKEN in Secrets, Run all.
+#    Loads our SFT adapter and prints the same delta.
+
+# 2. Hit the live Space
 curl -s -X POST -H "Content-Type: application/json" -d '{}' \
   https://yashash045-devops-pipeline-gym.hf.space/reset
-
-# 2. Open the Colab badge above → set HF_TOKEN in Secrets → Run all
-#    (~15 min on free T4, loads our SFT adapter, prints the same delta)
 
 # 3. Local Docker
 docker build -t devops-pipeline-gym . && docker run -p 8000:8000 devops-pipeline-gym
@@ -145,12 +147,12 @@ docker build -t devops-pipeline-gym . && docker run -p 8000:8000 devops-pipeline
 
 ## What's In The Repo
 
-- [`BLOG.md`](BLOG.md) — narrative writeup, design rationale, GRPO post-mortem
-- [`gradio_app.py`](gradio_app.py) — interactive demo UI
-- [`training/`](training/) — SFT warmup, GRPO trainer, eval harness, comparison charts
-- [`integration_test.py`](integration_test.py) — OpenEnv conformance tests
-- [`server/rewards.py`](server/rewards.py) — the six-component deterministic reward
-- [`devops_pipeline_gym_colab.ipynb`](devops_pipeline_gym_colab.ipynb) — judge-friendly reproducer
+- [`BLOG.md`](BLOG.md): narrative writeup, design rationale, GRPO post-mortem
+- [`gradio_app.py`](gradio_app.py): interactive demo UI
+- [`training/`](training/): SFT warmup, GRPO trainer, eval harness, comparison charts
+- [`integration_test.py`](integration_test.py): OpenEnv conformance tests
+- [`server/rewards.py`](server/rewards.py): the six-component deterministic reward
+- [`devops_pipeline_gym_colab.ipynb`](devops_pipeline_gym_colab.ipynb): judge-friendly reproducer
 
 ## Citation
 
@@ -158,4 +160,4 @@ docker build -t devops-pipeline-gym . && docker run -p 8000:8000 devops-pipeline
 
 ## License
 
-Apache 2.0.
+Apache 2.0. SPDX-License-Identifier: Apache-2.0.

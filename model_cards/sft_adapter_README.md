@@ -10,11 +10,12 @@ tags:
   - incident-response
   - reinforcement-learning
 license: apache-2.0
+pipeline_tag: text-generation
 ---
 
-# DevOps Pipeline Gym — SFT Adapter
+# DevOps Pipeline Gym, SFT Adapter
 
-*A 1.7B model that learned to investigate before acting on production incidents.*
+A 1.7B model that learned to investigate before acting on production incidents.
 
 [![Live Env Space](https://img.shields.io/badge/%F0%9F%A4%97%20Env%20Space-devops--pipeline--gym-blue)](https://huggingface.co/spaces/yashash045/devops-pipeline-gym)
 [![Code](https://img.shields.io/badge/GitHub-Yashash4%2Fdevops--pipeline--gym-black)](https://github.com/Yashash4/devops-pipeline-gym)
@@ -23,15 +24,15 @@ license: apache-2.0
 
 ## What this is
 
-A QLoRA adapter trained on top of `unsloth/Qwen3-1.7B-bnb-4bit` to act as an autonomous on-call engineer inside the [DevOps Pipeline Gym](https://huggingface.co/spaces/yashash045/devops-pipeline-gym) OpenEnv environment.
+A 1.7B on-call agent that scores -0.044 on `judgment_call` (seed 5003), beating every untrained baseline we tested from 7B Qwen2.5 up to 671B DeepSeek-V3.1. Under the hood it is a QLoRA adapter on top of `unsloth/Qwen3-1.7B-bnb-4bit`, running inside the [DevOps Pipeline Gym](https://huggingface.co/spaces/yashash045/devops-pipeline-gym) OpenEnv environment.
 
-The environment simulates production incident response across 5 microservices in a dependency graph. The agent rotates between three roles — DEV, SRE, OPS — and must investigate before acting, identify root cause through cascading symptoms, and choose among multiple valid recovery paths. Every reward component is deterministic Python — no LLM judge in the loop, no API calls to anyone.
+The environment simulates production incident response across 5 microservices in a dependency graph. The agent rotates between three roles (DEV, SRE, OPS). It has to investigate before acting, find the root cause through cascading symptoms, and pick from several valid recovery paths. Every reward component is deterministic Python. There is no LLM judge in the loop and no API calls going anywhere.
 
 ## What it learned
 
 Trained on **80 expert trajectories** for 2 epochs on a free Kaggle T4 (~30 minutes wall clock). 17.4M trainable parameters (1.69% of base). QLoRA configuration: `r=16, alpha=32, dropout=0.05`, applied to all attention + MLP modules.
 
-The hero result: **a 1.7B model trained on 80 trajectories outperforms 70B-700B frontier models** on the same `judgment_call` task. Same task, same seed family, same prompt format, same scoring rubric. Frontier baselines hit through HF Inference Router (n=3 seeds averaged for frontier, single-seed for our trained model and the 7B notebook baseline):
+The hero result: **a 1.7B model trained on 80 trajectories outperforms 7B-671B frontier models** on the same `judgment_call` task. Same task, same seed family, same prompt format, same scoring rubric. Frontier baselines hit through HF Inference Router (n=3 seeds averaged for frontier, single-seed for our trained model and the 7B notebook baseline):
 
 | Model | Size | Reward on `judgment_call` | Δ ours beats |
 |---|---|---:|---:|
@@ -41,11 +42,11 @@ The hero result: **a 1.7B model trained on 80 trajectories outperforms 70B-700B 
 | Qwen2.5-72B-Instruct (untrained) | 72B | -1.232 | **+1.188** |
 | GPT-OSS-120B (untrained) | 120B MoE | -1.201 | **+1.157** |
 | Qwen2.5-7B-Instruct (untrained, baseline in notebook) | 7B | -1.200 | **+1.156** |
-| **Qwen3-1.7B + this SFT adapter (TRAINED)** | **1.7B** | **-0.044** | — |
+| **Qwen3-1.7B + this SFT adapter (TRAINED)** | **1.7B** | **-0.044** | (baseline) |
 
-A 1.7B model trained on 80 expert trajectories beats every untrained model we tested — from a 7B same-family Qwen baseline to the 671B DeepSeek-V3.1 — by **+1.16 to +1.77 reward** on this task. We did not run untrained Qwen3-1.7B as a same-family baseline within budget; the 7B Qwen2.5 row is the closest-size untrained model the demo notebook actually invokes via HF Router.
+A 1.7B model trained on 80 expert trajectories beats every untrained model we tested. That spans a 7B same-family Qwen baseline up to the 671B DeepSeek-V3.1, by **+1.16 to +1.77 reward** on this task. We did not run untrained Qwen3-1.7B as a same-family baseline within budget. The 7B Qwen2.5 row is the closest-size untrained model the demo notebook actually invokes via HF Router.
 
-Frontier models default to either immediate `abort` (DeepSeek, Mistral all return -1.580 across all tasks) or attempted-but-failed action sequences. None succeed at the task without env-specific training. The trained 1.7B knows to investigate first, identify root cause, deploy carefully, and approve only when healthy.
+Frontier models default to either immediate `abort` (DeepSeek and Mistral both return -1.580 across all tasks) or attempted-but-failed action sequences. None of them succeed at the task without env-specific training. The trained 1.7B knows to investigate first, find the root cause, deploy carefully, and approve only when the system is healthy.
 
 ## Quick start
 
@@ -65,7 +66,7 @@ model = PeftModel.from_pretrained(model, "yashash045/devops-pipeline-gym-sft-ada
 
 ## Reproduce on free Kaggle T4 (~15 min)
 
-The full eval pipeline runs on free Kaggle T4. See `scripts/kaggle_cell_acc1.py` in the [code repo](https://github.com/Yashash4/devops-pipeline-gym) — it's a single-cell paste that boots the env, downloads this adapter, runs multi-seed eval, and uploads results back to this repo.
+The full eval pipeline runs on a free Kaggle T4. See `scripts/kaggle_cell_acc1.py` in the [code repo](https://github.com/Yashash4/devops-pipeline-gym). It's a single-cell paste that boots the env, downloads this adapter, runs multi-seed eval, and uploads results back to this repo.
 
 ## Training stack
 
@@ -77,7 +78,7 @@ The full eval pipeline runs on free Kaggle T4. See `scripts/kaggle_cell_acc1.py`
 
 ## What's the larger work
 
-This adapter is the **trained policy** for the [DevOps Pipeline Gym](https://huggingface.co/spaces/yashash045/devops-pipeline-gym) — an OpenEnv environment built for the Meta PyTorch OpenEnv Hackathon (India 2026). The full submission includes:
+This adapter is the **trained policy** for the [DevOps Pipeline Gym](https://huggingface.co/spaces/yashash045/devops-pipeline-gym), an OpenEnv environment built for the Meta PyTorch OpenEnv Hackathon (India 2026). The full submission includes:
 
 - The env (deterministic, no-LLM-judge, role-rotated single policy)
 - This SFT adapter (the trained policy)
@@ -99,4 +100,4 @@ This adapter is the **trained policy** for the [DevOps Pipeline Gym](https://hug
 }
 ```
 
-(The TRL citation above is for the open-source library we used to train this adapter — Hugging Face's `trl` package by von Werra et al. Standard academic credit for the training framework.)
+(The TRL citation above is for the open-source library we used to train this adapter. That's Hugging Face's `trl` package by von Werra et al. Standard academic credit for the training framework.)

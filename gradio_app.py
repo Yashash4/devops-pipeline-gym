@@ -212,7 +212,7 @@ def do_action(sess, action_type: str, role: Role, service: str,
     if sess is None or sess.obs is None:
         return _refresh(_ensure_session(sess, DEFAULT_ENV_URL))
     if sess.done:
-        sess.log.append("[INFO] Episode is done — click Reset to play again.")
+        sess.log.append("[INFO] Episode is done. Click Reset to play again.")
         return _refresh(sess)
     kwargs: Dict[str, Any] = {"action_type": ActionType(action_type), "role": role}
     if action_type in ("view_logs", "view_config", "edit_config", "deploy", "rollback"):
@@ -234,9 +234,9 @@ def do_action(sess, action_type: str, role: Role, service: str,
 # --- UI --------------------------------------------------------------------
 
 def build_ui() -> gr.Blocks:
-    with gr.Blocks(title="DevOps Pipeline Gym — Play as the Agent",
+    with gr.Blocks(title="DevOps Pipeline Gym (Play as the Agent)",
                    theme=gr.themes.Soft()) as demo:
-        gr.Markdown("# DevOps Pipeline Gym — Play as the On-Call Engineer\n"
+        gr.Markdown("# DevOps Pipeline Gym. Play as the On-Call Engineer.\n"
                     "Drive the same env our trained policy sees. "
                     "Investigate before acting. Mind your role.")
         sess_state = gr.State(value=None)
@@ -255,7 +255,7 @@ def build_ui() -> gr.Blocks:
                     headers=["service", "health", "latency", "error_rate", "version"],
                     datatype=["str"] * 5, interactive=False, label="Service health")
 
-                gr.Markdown("### Action panel — buttons enforce role gating server-side")
+                gr.Markdown("### Action panel. Buttons enforce role gating server-side.")
                 svc_dd = gr.Dropdown(choices=SERVICES, value="api-gateway", label="service")
                 with gr.Accordion("DEV actions (config, migrations)", open=True):
                     with gr.Row():

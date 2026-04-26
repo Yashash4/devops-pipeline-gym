@@ -1,9 +1,6 @@
-# DevOps Pipeline Gym — Architecture
+# DevOps Pipeline Gym, Architecture
 
-A 3-second view of how an LLM agent talks to the environment, how the
-**role gate** routes each action, how the **6-microservice dependency graph**
-evolves, and how the **6 deterministic reward components** produce a bounded
-per-step reward in `[-0.40, +0.32]`.
+This is the quick tour. An LLM agent sends actions. The **role gate** decides which actions count for the current role. A graph of 5 microservices reacts. Six deterministic reward terms add up to a bounded per-step reward in `[-0.40, +0.32]`.
 
 ---
 
@@ -102,27 +99,26 @@ flowchart TD
 
 ## Key invariants the diagram encodes
 
-- **Single policy, role-conditioned**: one model, role lives in the observation
-  (`current_role`) and on the action (`PipelineAction.role`). No separate policies
-  per role.
-- **Role gate is hard**: mismatched `action.role` short-circuits with `-0.15` and
-  the action does **not** execute. Wrong action for role: `-0.10`.
-- **Deterministic env**: scenarios load with `chosen_seed`; `random_incident`
-  honours `DEVOPS_SEED`. No `random.random()`, no `hash()`.
+- **Single policy, role-conditioned**: one model. The role lives in the observation
+  (`current_role`) and on the action (`PipelineAction.role`). There are no
+  separate policies per role.
+- **Role gate is hard**: a mismatched `action.role` short-circuits with `-0.15`
+  and the action does **not** execute. A wrong action for the current role costs
+  `-0.10`.
+- **Deterministic env**: scenarios load with `chosen_seed`. `random_incident`
+  honours `DEVOPS_SEED`. There is no `random.random()` and no `hash()` anywhere.
 - **No LLM in env runtime**: graders, curriculum, and scenarios are pure Python.
-- **Reward = Round 1 (5 components) + role_alignment (1)**, then bounded to
-  `[-0.40, +0.32]`. Terminal bonus only fires once per episode (approve/abort/
-  timeout) on top of the per-step bound.
-- **Curriculum picks the task** in `reset()` unless explicit task is requested
-  (kwargs or `DEVOPS_TASK` env var).
+- **Reward = 5 outcome components + role_alignment**, then bounded to
+  `[-0.40, +0.32]`. The terminal bonus fires once per episode (on approve, abort,
+  or timeout) and sits on top of the per-step bound.
+- **Curriculum picks the task** in `reset()` unless an explicit task is requested
+  (via kwargs or the `DEVOPS_TASK` env var).
 
 ---
 
 ## How to embed in the README
 
-Pick one of the three options below.
-
-**Option A — inline mermaid (recommended for GitHub):**
+Inline mermaid for GitHub:
 ~~~markdown
 ## Architecture
 
@@ -132,7 +128,7 @@ flowchart TD
 ```
 ~~~
 
-**Option B — rendered PNG (works in HF Space READMEs):**
+Rendered PNG for HF Space READMEs:
 ```markdown
 ## Architecture
 ![Architecture](docs/architecture.png)
@@ -142,7 +138,7 @@ Generate the PNG with:
 python scripts/render_diagram.py
 ```
 
-**Option C — ASCII fallback (safe everywhere):**
+ASCII fallback:
 ````markdown
 ## Architecture
 ```text

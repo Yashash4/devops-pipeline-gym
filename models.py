@@ -59,7 +59,7 @@ class MigrationType(str, Enum):
 
 
 class Role(str, Enum):
-    """Round 2 — agent action mode (situation-aware specialization)."""
+    """Action mode for role-gated dispatch."""
     DEV = "dev"
     SRE = "sre"
     OPS = "ops"
@@ -135,7 +135,7 @@ class AlertInfo(BaseModel):
 
 
 class RoleHistoryEntry(BaseModel):
-    """Round 2 — one entry per role-driven action. Stored on observation."""
+    """One entry per role-driven action. Stored on observation."""
     step: int
     role: Role
     action_type: ActionType
@@ -173,8 +173,8 @@ class PipelineAction(Action):
     )
     role: Role = Field(
         default=Role.SRE,
-        description="Round 2 — which role is taking this action. Default SRE so "
-                    "old-style Round 1 actions still work.",
+        description="Which role is taking this action. Defaults to SRE for "
+                    "backward compatibility with role-agnostic actions.",
     )
 
 
@@ -219,9 +219,9 @@ class PipelineObservation(Observation):
     )
     current_role: Role = Field(
         default=Role.SRE,
-        description="Round 2 — which role is expected to act next.",
+        description="Which role is expected to act next.",
     )
     role_history: List[RoleHistoryEntry] = Field(
         default_factory=list,
-        description="Round 2 — log of which role acted on which step.",
+        description="Append-only log of role-driven actions, one entry per accepted step.",
     )

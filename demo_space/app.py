@@ -209,8 +209,8 @@ def build_ui():
     with gr.Blocks(title="DevOps Pipeline Demo",
                    theme=gr.themes.Soft(primary_hue="blue")) as demo:
         gr.Markdown(
-            "# 🛠️ DevOps Pipeline Gym — Play as the On-Call Engineer\n"
-            "*Five microservices. Three role hats. One rule: don't make it worse.* "
+            "# 🛠️ DevOps Pipeline Gym. Play as the On-Call Engineer.\n"
+            "Five microservices. Three roles. One rule: do not make it worse. "
             "Same env our trained Qwen3-1.7B agent operates in.\n\n"
             "**Env Space:** [yashash045/devops-pipeline-gym](https://huggingface.co/spaces/yashash045/devops-pipeline-gym) · "
             "**Trained adapter:** [yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter) · "
@@ -261,7 +261,7 @@ def build_ui():
         gr.Markdown("### Action panel")
         gr.Markdown(
             "Buttons are organised by role (DEV / SRE / OPS). "
-            "Acting outside the **current_role** above costs `-0.15` and the action is dropped — try it and see."
+            "Acting outside the **current_role** above costs `-0.15` and the action is dropped. Try it and see."
         )
 
         with gr.Row():

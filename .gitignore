@@ -12,3 +12,10 @@ _*.err
 # Phase X1 trajectory cleanup backup (local-only safety net)
 data/*.bak
 data/sft_trajectories.jsonl.*.bak
+
+# Internal strategy / agent brief, not for public submission
+AGENT_REFERENCE.md
+.claude/
+.pytest_cache/
+frontier_results/
+dryrun_phase_f/
