@@ -139,8 +139,9 @@ if not health_ok:
 
 try:
     # Step 5: GRPO with denser config
-    print("[5/7] GRPO RETRY: 200 steps from SFT adapter, num_gen=16, max_comp_len=512", flush=True)
-    print("    Hypothesis: more samples + longer completions + SFT prior -> reward signal escapes the flat-band trap", flush=True)
+    print("[5/7] GRPO RETRY: 200 steps from SFT adapter, num_gen=4, max_comp_len=512", flush=True)
+    print("    Differences vs prior 30-step run: 6.7x more steps, 2x longer completions (fixes clipped_ratio=1), starts from SFT adapter (not raw base).", flush=True)
+    print("    num_generations=4 matches batch_size*grad_accum=4 (TRL requirement: gen_batch divisible by num_generations).", flush=True)
     subprocess.run(
         [
             sys.executable, "training/grpo_train.py",
@@ -150,7 +151,7 @@ try:
             "--max-steps", "200",
             "--batch-size", "1",
             "--grad-accum", "4",
-            "--num-generations", "16",
+            "--num-generations", "4",
             "--prompts-per-task", "2",
             "--learning-rate", "5e-6",
             "--max-completion-length", "512",
