@@ -69,7 +69,7 @@ Qwen3-1.7B-bnb-4bit, same prompt, same temperature 0.3, same task (`judgment_cal
 
 ### Table B — Frontier model comparison (the wow table)
 
-Same task (`judgment_call`), same prompt format. Frontier baselines via HF Inference Router, n=3 seeds each. Our trained 1.7B is single-seed (5003) reported for direct comparability with Table A.
+Same task (`judgment_call`), same prompt format. Frontier baselines via HF Inference Router, **n=3 seeds averaged per model**. Our trained 1.7B is **single-seed (5003)** reported for direct comparability with Table A. The Colab notebook re-runs Qwen2.5-72B live at seed 5003 and gets `-1.070` — slightly off the n=3 average of `-1.232` shown here, same direction same conclusion.
 
 | Model | Size | Reward on `judgment_call` | Δ ours beats |
 |---|---|---:|---:|
