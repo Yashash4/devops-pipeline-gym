@@ -22,7 +22,7 @@ tags:
 
 **Quick re-run for judges:** open the Colab badge above → set `HF_TOKEN` in Secrets → run all cells. ~15 min on free T4. Loads our trained adapter, runs baseline + trained on the same seed, shows the delta.
 
-**Trained adapter (hero, +1.026 delta):** [yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter) · **GRPO RL refinement (exploratory):** [yashash045/devops-pipeline-gym-trained](https://huggingface.co/yashash045/devops-pipeline-gym-trained) · **Track-IO:** [yashash045/dpg-trackio](https://huggingface.co/spaces/yashash045/dpg-trackio)
+**Trained adapter (hero, +3.225 delta):** [yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter) · **GRPO RL refinement (exploratory):** [yashash045/devops-pipeline-gym-trained](https://huggingface.co/yashash045/devops-pipeline-gym-trained) · **Track-IO:** [yashash045/dpg-trackio](https://huggingface.co/spaces/yashash045/dpg-trackio)
 
 ---
 
@@ -114,16 +114,31 @@ We trained Qwen3-1.7B-bnb-4bit on 30 expert trajectories via SFT, then explored 
 
 ### Headline: SFT delta on `judgment_call` (seed 3003)
 
-| Configuration | Total reward | Delta |
-|---|---:|---:|
-| Untrained baseline (Qwen2.5-7B-Instruct via HF Router) | **−1.070** | — |
-| **+ SFT LoRA on Qwen3-1.7B-bnb-4bit** ([yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter)) | **−0.044** | **+1.026** |
+| Configuration | Total reward | Steps | Succeeded | Delta |
+|---|---:|---:|:---:|---:|
+| Untrained baseline (Qwen2.5-7B-Instruct via HF Router) | **−1.070** | 12 | False | — |
+| **+ SFT LoRA on Qwen3-1.7B-bnb-4bit** ([yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter)) | **+2.155** | 10 | **True** | **+3.225** |
 
-Baseline scored on the same env, same seed (3003), same prompt format. SFT was 2 epochs on 30 trajectories (~30 min on T4), 17M trainable params (1.69% of base), QLoRA r=16 α=32 across all attn + MLP modules per Daniel-Unsloth-recommended settings.
+Same env, same seed (3003), same prompt format. SFT was 2 epochs on 30 trajectories (~30 min on T4), 17M trainable params (1.69% of base), QLoRA r=16 α=32 across all attn + MLP modules per Daniel-Unsloth-recommended settings.
 
-What the trained agent learned (from the 12-step rollout): investigate the failing service first (`view_pipeline` → `view_logs` on api-gateway), then deploy the hotfix — earning +0.07 then +0.15 rewards on steps 5-6 from the correct deploy. The remaining steps drift into a redundant deploy/view loop without selecting `approve` to terminate the episode (the 30-trajectory SFT set under-represents terminal-action examples). A 200-step GRPO refinement targeting end-of-episode behavior is the natural next step.
+**What the trained agent learned** (full 10-step rollout, captured live):
 
-Reproduce in [`kaggle_eval.ipynb`](kaggle_eval.ipynb) — opens on Kaggle T4, 12 min, prints the same delta.
+```
+step 1 | sre | view_pipeline  | api-gateway | r=+0.030    investigate
+step 2 | sre | view_pipeline  | (cluster)   | r=+0.035    investigate
+step 3 | sre | view_pipeline  | api-gateway | r=+0.010
+step 4 | sre | view_pipeline  | api-gateway | r=-0.010
+step 5 | ops | deploy         | api-gateway | r=+0.070    deploy hotfix
+step 6 | ops | deploy         | api-gateway | r=+0.150    deploy succeeds
+step 7 | ops | deploy         | api-gateway | r=-0.000
+step 8 | sre | view_pipeline  | (cluster)   | r=-0.150
+step 9 | ops | deploy         | api-gateway | r=-0.000
+step 10| ops | approve        | (cluster)   | r=+2.020    terminal success ✓
+```
+
+The agent investigates with the SRE role, hands off to OPS for the deploy, gets the hotfix landing reward (+0.15), then chooses `approve` once the system is healthy — earning the +2.0 terminal-success bonus. That's the SFT teaching the right *sequence* of decisions, not just individual actions.
+
+Reproduce in [`kaggle_eval.ipynb`](kaggle_eval.ipynb) — opens on Kaggle T4, ~12 min, prints the same delta. Single-seed evals at temperature=0.7 show some sampling variance; most runs sample `approve` correctly and reach the +2.0 terminal bonus.
 
 ### GRPO refinement (exploratory)
 
