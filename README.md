@@ -14,7 +14,8 @@ tags:
 # DevOps Pipeline Gym
 *A deterministic, no-LLM-judge OpenEnv environment for training LLMs to make production-critical decisions under uncertainty — with role-rotated single-policy coordination across DEV / SRE / OPS.*
 
-[![HF Space](https://img.shields.io/badge/%F0%9F%A4%97%20Space-devops--pipeline--gym-blue)](https://huggingface.co/spaces/yashash045/devops-pipeline-gym)
+[![HF Space](https://img.shields.io/badge/%F0%9F%A4%97%20Env%20Space-devops--pipeline--gym-blue)](https://huggingface.co/spaces/yashash045/devops-pipeline-gym)
+[![Gradio Demo](https://img.shields.io/badge/%F0%9F%A4%97%20Play%20as%20agent-Gradio%20demo-yellow)](https://huggingface.co/spaces/yashash045/devops-pipeline-demo)
 [![SFT Adapter](https://img.shields.io/badge/%F0%9F%A4%97%20Adapter-SFT-orange)](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter)
 [![GRPO Adapter](https://img.shields.io/badge/%F0%9F%A4%97%20Adapter-GRPO-orange)](https://huggingface.co/yashash045/devops-pipeline-gym-trained)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Yashash4/devops-pipeline-gym/blob/main/devops_pipeline_gym_colab.ipynb)
