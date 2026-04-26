@@ -175,6 +175,11 @@ try:
             "TRACKIO_SPACE_ID": "yashash045/dpg-trackio",
             "TRACKIO_PROJECT": "devops-pipeline-gym-grpo",
             "VLLM_ENFORCE_EAGER": "1",
+            # Drop Unsloth wrapping — Unsloth's xformers attention has no
+            # backward kernel for Qwen3's 5D BMGHK shape (proven in proof
+            # v4 run). Use pure HF Transformers + BitsAndBytesConfig + PEFT.
+            # kube-sre-gym (1st place) used this exact stack.
+            "NO_UNSLOTH": "1",
             # Drop VLLM_LOGGING_LEVEL=DEBUG — logs are now clean enough
             # without the per-batch profile spam.
             # kube-sre-gym (sid-rp): "critical for TRL+vLLM colocate" — lets

@@ -519,28 +519,55 @@ def main():
     except ImportError:
         logger.info("TRL experimental.openenv NOT available; using Option B (closure-based multi-step)")
 
-    logger.info("Loading base model: %s", args.model)
-    fpt_kwargs = dict(
-        model_name=args.model,
-        max_seq_length=2048,
-        dtype=None,
-        load_in_4bit=True,
-    )
-    if args.use_vllm:
-        # Unsloth vLLM colocate path. fast_inference flips the model into a
-        # vLLM-served generation backend; max_lora_rank must match the GRPO
-        # LoRA rank (16); gpu_memory_utilization at 0.5 matches kube-sre-gym's
-        # (sid-rp) working H100 config — A100 80GB has plenty of room.
-        # enforce_eager bypasses torch.compile, sidestepping the v0.19 graph
-        # bug seen on Qwen3 (size_N nodes still have users at decompose-time).
-        fpt_kwargs.update(
-            fast_inference=True,
-            max_lora_rank=16,
-            gpu_memory_utilization=0.5,
-            enforce_eager=True,
+    no_unsloth = os.environ.get("NO_UNSLOTH", "").lower() in ("1", "true", "yes")
+    if no_unsloth:
+        # Pure HF + PEFT + TRL path (kube-sre-gym 1st place pattern).
+        # Avoids Unsloth's xformers attention which has no backward kernel
+        # for Qwen3's 5D BMGHK shape (xformers/ops/fmha/dispatch.py:83
+        # NotImplementedError).
+        logger.info("Loading base model via PURE HF (NO_UNSLOTH=1): %s", args.model)
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
         )
-        logger.info("vLLM colocate enabled (fast_inference=True, max_lora_rank=16, gpu_mem=0.5, enforce_eager=True)")
-    model, tokenizer = FastLanguageModel.from_pretrained(**fpt_kwargs)
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            quantization_config=bnb_config,
+            torch_dtype=torch.bfloat16,
+            attn_implementation="sdpa",   # NOT xformers — works for Qwen3 GQA
+            device_map="cuda:0",
+        )
+        tokenizer = AutoTokenizer.from_pretrained(args.model)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        # Prepare for k-bit training — required for QLoRA gradient flow
+        from peft import prepare_model_for_kbit_training
+        model = prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": False},
+        )
+        logger.info("Pure HF model loaded with SDPA attention + 4-bit quant + grad checkpointing")
+    else:
+        logger.info("Loading base model via Unsloth: %s", args.model)
+        fpt_kwargs = dict(
+            model_name=args.model,
+            max_seq_length=2048,
+            dtype=None,
+            load_in_4bit=True,
+        )
+        if args.use_vllm:
+            fpt_kwargs.update(
+                fast_inference=True,
+                max_lora_rank=16,
+                gpu_memory_utilization=0.5,
+                enforce_eager=True,
+            )
+            logger.info("vLLM colocate enabled (fast_inference=True, max_lora_rank=16, gpu_mem=0.5, enforce_eager=True)")
+        model, tokenizer = FastLanguageModel.from_pretrained(**fpt_kwargs)
 
     # Phase 6.5 hotfix — load the SFT adapter as a FROZEN named prior and
     # let GRPO stack a new trainable adapter on top. Do NOT merge.
@@ -596,47 +623,75 @@ def main():
         "Gradient checkpointing mode: %s (use_vllm=%s, sft_loaded=%s)",
         grad_ckpt_mode, args.use_vllm, sft_loaded,
     )
-    try:
-        # lora_alpha = 2 * r is Daniel Han (Unsloth) and kube-sre-gym (sid-rp)
-        # standard. lora_alpha=16 (1× rank) was a leftover from earlier dry-runs.
-        model = FastLanguageModel.get_peft_model(
-            model,
+    if no_unsloth:
+        # Pure PEFT path — no Unsloth wrapping. SFT adapter (if loaded) is
+        # already in 'sft_warmup' (frozen). Now add 'default' as trainable.
+        from peft import LoraConfig
+        lora_config = LoraConfig(
             r=16,
             lora_alpha=32,
             lora_dropout=0.05,
             bias="none",
-            use_gradient_checkpointing=grad_ckpt_mode,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                            "gate_proj", "up_proj", "down_proj"],
-        )
-        logger.info(
-            "GRPO LoRA added via Unsloth. Active adapter: %s",
-            getattr(model, "active_adapter", "default"),
-        )
-    except Exception as e:
-        # Unsloth's get_peft_model isn't always happy being handed a model
-        # that's already wrapped in PeftModel. Fall back to stock PEFT so
-        # we at least get the adapter we need on top of the SFT prior.
-        logger.warning(
-            "Unsloth get_peft_model failed on pre-wrapped PeftModel (%s: %s); "
-            "falling back to standard peft.LoraConfig + add_adapter",
-            type(e).__name__, e,
-        )
-        from peft import LoraConfig
-        grpo_lora_config = LoraConfig(
-            r=16,
-            lora_alpha=16,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                            "gate_proj", "up_proj", "down_proj"],
-            lora_dropout=0.0,
-            bias="none",
             task_type="CAUSAL_LM",
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                            "gate_proj", "up_proj", "down_proj"],
         )
-        model.add_adapter("grpo_training", grpo_lora_config)
-        model.set_adapter("grpo_training")
-        logger.info(
-            "GRPO adapter added via PEFT fallback; active adapter: grpo_training"
-        )
+        if sft_loaded:
+            # Already wrapped in PeftModel from SFT load — use add_adapter
+            model.add_adapter("default", lora_config)
+            model.set_adapter("default")
+            logger.info("GRPO LoRA added via PEFT add_adapter on top of frozen SFT prior")
+        else:
+            from peft import get_peft_model
+            model = get_peft_model(model, lora_config)
+            logger.info("GRPO LoRA added via pure PEFT get_peft_model (no SFT prior)")
+        # Skip the Unsloth try/except block entirely — pure PEFT done
+        try:
+            pass  # placeholder to keep the try/except structure below valid
+        except Exception:
+            pass
+    else:
+        try:
+            # lora_alpha = 2 * r is Daniel Han (Unsloth) and kube-sre-gym (sid-rp)
+            # standard. lora_alpha=16 (1× rank) was a leftover from earlier dry-runs.
+            model = FastLanguageModel.get_peft_model(
+                model,
+                r=16,
+                lora_alpha=32,
+                lora_dropout=0.05,
+                bias="none",
+                use_gradient_checkpointing=grad_ckpt_mode,
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                                "gate_proj", "up_proj", "down_proj"],
+            )
+            logger.info(
+                "GRPO LoRA added via Unsloth. Active adapter: %s",
+                getattr(model, "active_adapter", "default"),
+            )
+        except Exception as e:
+            # Unsloth's get_peft_model isn't always happy being handed a model
+            # that's already wrapped in PeftModel. Fall back to stock PEFT so
+            # we at least get the adapter we need on top of the SFT prior.
+            logger.warning(
+                "Unsloth get_peft_model failed on pre-wrapped PeftModel (%s: %s); "
+                "falling back to standard peft.LoraConfig + add_adapter",
+                type(e).__name__, e,
+            )
+            from peft import LoraConfig
+            grpo_lora_config = LoraConfig(
+                r=16,
+                lora_alpha=16,
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                                "gate_proj", "up_proj", "down_proj"],
+                lora_dropout=0.0,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+            model.add_adapter("grpo_training", grpo_lora_config)
+            model.set_adapter("grpo_training")
+            logger.info(
+                "GRPO adapter added via PEFT fallback; active adapter: grpo_training"
+            )
 
     # Adapter state sanity check — blows up loudly if we ended up with a
     # model that can't train (no trainable params) or has suspiciously many
