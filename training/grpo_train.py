@@ -293,7 +293,7 @@ def make_reward_function(env_url, model_ref, tokenizer_ref, system_prompt,
                 try:
                     action1 = PipelineAction(**parse_completion(first_completion))
                 except Exception as e:
-                    logger.warning("step 1 parse failed: %s", str(e)[:80])
+                    logger.warning("step 1 parse failed: %s: %r", type(e).__name__, e)
                     rewards.append(-1.0)
                     continue
 
@@ -302,7 +302,7 @@ def make_reward_function(env_url, model_ref, tokenizer_ref, system_prompt,
                     try:
                         result = client.step(action1)
                     except Exception as e:
-                        logger.warning("step 1 env error: %s", str(e)[:80])
+                        logger.warning("step 1 env error: %s: %r", type(e).__name__, e)
                         rewards.append(-1.0)
                         continue
                     episode_reward = float(getattr(result, "reward", 0.0) or 0.0)
@@ -333,7 +333,10 @@ def make_reward_function(env_url, model_ref, tokenizer_ref, system_prompt,
                             done = bool(getattr(step_result, "done", False))
                             current_obs = getattr(step_result, "observation", None)
                         except Exception as e:
-                            logger.warning("step %d failed: %s", step + 1, str(e)[:80])
+                            logger.warning(
+                                "step %d failed: %s: %r",
+                                step + 1, type(e).__name__, e,
+                            )
                             episode_reward -= 0.1
                         step += 1
 
@@ -430,24 +433,29 @@ def main():
                          "gate_proj", "up_proj", "down_proj"],
     )
 
+    from peft import get_peft_model
     if sft_loaded:
-        # Stack: load SFT first as 'sft_warmup' (frozen), then add 'default' (trainable)
-        logger.info("Loading SFT adapter as frozen prior: %s", args.sft_adapter_path)
+        # Load SFT adapter, MERGE it into the base (so SFT weights are active
+        # during generation), THEN add a fresh trainable LoRA on top. PEFT
+        # only activates one adapter at a time — stacked-adapter approach
+        # leaves the SFT prior inactive during generation, producing 128-token
+        # garbage that DAPO masks → zero gradient. merge_and_unload bakes the
+        # SFT weights into the base and frees the adapter slot for GRPO.
+        logger.info("Loading SFT adapter and merging into base: %s", args.sft_adapter_path)
         model = PeftModel.from_pretrained(
-            model, args.sft_adapter_path,
-            adapter_name="sft_warmup", is_trainable=False,
+            model, args.sft_adapter_path, is_trainable=False,
         )
-        model.add_adapter("default", lora_config)
-        model.set_adapter("default")
-        # Defense in depth: explicitly freeze sft_warmup, ensure default is trainable
-        for name, param in model.named_parameters():
-            if "sft_warmup" in name:
-                param.requires_grad = False
-            elif "lora_" in name and "default" in name:
-                param.requires_grad = True
-        logger.info("Stacked: sft_warmup (frozen) + default (trainable GRPO LoRA)")
+        model = model.merge_and_unload()
+        logger.info("SFT weights merged into base. Adding fresh trainable GRPO LoRA.")
+        # merge_and_unload de-quantizes some layers; re-prep for k-bit training
+        # to restore gradient checkpointing + cast to fp32 where needed.
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": False},
+        )
+        model = get_peft_model(model, lora_config)
     else:
-        from peft import get_peft_model
         model = get_peft_model(model, lora_config)
         logger.info("Single trainable LoRA on raw base (no SFT prior)")
 
