@@ -22,7 +22,7 @@ tags:
 
 **Quick re-run for judges:** open the Colab badge above → set `HF_TOKEN` in Secrets → run all cells. ~15 min on free T4. Loads our trained adapter, runs baseline + trained on the same seed, shows the delta.
 
-**Trained adapter (hero, +3.225 delta):** [yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter) · **GRPO RL refinement (exploratory):** [yashash045/devops-pipeline-gym-trained](https://huggingface.co/yashash045/devops-pipeline-gym-trained) · **Track-IO:** [yashash045/dpg-trackio](https://huggingface.co/spaces/yashash045/dpg-trackio)
+**Trained adapter (hero, +1.026 delta):** [yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter) · **GRPO RL refinement (exploratory):** [yashash045/devops-pipeline-gym-trained](https://huggingface.co/yashash045/devops-pipeline-gym-trained) · **Track-IO:** [yashash045/dpg-trackio](https://huggingface.co/spaces/yashash045/dpg-trackio)
 
 ---
 
@@ -116,10 +116,12 @@ We trained Qwen3-1.7B-bnb-4bit on 30 expert trajectories via SFT, then explored 
 
 | Configuration | Total reward | Delta |
 |---|---:|---:|
-| Untrained Qwen3-1.7B-bnb-4bit | **−1.070** | — |
-| **+ SFT LoRA** ([yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter)) | **+2.155** | **+3.225** |
+| Untrained baseline (Qwen2.5-7B-Instruct via HF Router) | **−1.070** | — |
+| **+ SFT LoRA on Qwen3-1.7B-bnb-4bit** ([yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter)) | **−0.044** | **+1.026** |
 
-Baseline scored on the same env, same seed, same prompt format. SFT was 2 epochs on 30 trajectories (~30 min on T4), 17M trainable params (1.69% of base), QLoRA r=16 α=32 across all attn + MLP modules per Daniel-Unsloth-recommended settings.
+Baseline scored on the same env, same seed (3003), same prompt format. SFT was 2 epochs on 30 trajectories (~30 min on T4), 17M trainable params (1.69% of base), QLoRA r=16 α=32 across all attn + MLP modules per Daniel-Unsloth-recommended settings.
+
+What the trained agent learned (from the 12-step rollout): investigate the failing service first (`view_pipeline` → `view_logs` on api-gateway), then deploy the hotfix — earning +0.07 then +0.15 rewards on steps 5-6 from the correct deploy. The remaining steps drift into a redundant deploy/view loop without selecting `approve` to terminate the episode (the 30-trajectory SFT set under-represents terminal-action examples). A 200-step GRPO refinement targeting end-of-episode behavior is the natural next step.
 
 Reproduce in [`kaggle_eval.ipynb`](kaggle_eval.ipynb) — opens on Kaggle T4, 12 min, prints the same delta.
 
