@@ -160,9 +160,9 @@ if not health_ok:
 
 try:
     # Step 5: Run GRPO training (PROOF-RUN v2 — SFT warm-start + tight rollout)
-    print("[5/7] PROOF RUN v2: 20 steps from SFT prior + tight rollout (no vLLM)", flush=True)
+    print("[5/7] PROOF RUN v3: 20 steps single-step GRPO from SFT-as-trainable-LoRA", flush=True)
     print(f"    SFT warm-start: {sft_path}/final (already scored +2.155 on judgment_call)", flush=True)
-    print("    GRPO is polishing, not learning from chaos. Hard stop: 6 min for step 1.", flush=True)
+    print("    Single-step rollout: GRPO completion -> parse -> env.step -> reward.", flush=True)
     subprocess.run(
         [
             sys.executable, "training/grpo_train.py",
@@ -174,11 +174,9 @@ try:
             "--grad-accum", "4",
             "--num-generations", "2",
             "--prompts-per-task", "2",
-            "--max-episode-steps", "6",
             "--learning-rate", "5e-6",
             "--max-completion-length", "128",
             "--output-dir", "/workspace/grpo_output",
-            # No --use-vllm: model.generate path, no GPU lock contention
         ],
         check=True,
         env={

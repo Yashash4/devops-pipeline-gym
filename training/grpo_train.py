@@ -1,14 +1,16 @@
-"""GRPO training for DevOps Pipeline Gym (clean kube-sre-gym pattern).
+"""GRPO training for DevOps Pipeline Gym (clean single-step kube-sre-gym pattern).
 
-Pure HF Transformers + PEFT + TRL. No Unsloth wrapping (xformers BMGHK
-bug on Qwen3 GQA), no vLLM (multi-step rollout incompatible with vLLM
-colocate's lock model). Same path that won 1st place last hackathon.
+Pure HF Transformers + PEFT + TRL. No Unsloth, no vLLM, no multi-step
+rollout inside the reward function (calling model.generate during a
+training forward pass is structurally broken: PEFT attribute delegation,
+grad-ckpt-vs-use-cache conflict, autograd graph contamination).
 
 Architecture:
   base = AutoModelForCausalLM (4-bit BNB NF4 + SDPA attention)
-  + sft_warmup adapter (frozen prior, optional)
-  + default adapter (trainable GRPO LoRA)
-  -> stock trl.GRPOTrainer with closure-based multi-step rollout reward
+  + SFT adapter loaded as the trainable LoRA (is_trainable=True) — SFT
+    weights are active during generation AND continue-trainable by GRPO
+  -> stock trl.GRPOTrainer with single-step env-reward function:
+       completion -> parse action -> env.reset -> env.step -> reward
 
 Usage:
   python training/grpo_train.py \\
@@ -16,8 +18,8 @@ Usage:
     --env-url http://localhost:8000 \\
     --sft-adapter-path /workspace/sft_adapter/final \\
     --max-steps 20 --num-generations 2 --batch-size 1 --grad-accum 4 \\
-    --max-completion-length 128 --max-episode-steps 6 \\
-    --learning-rate 5e-6 --output-dir /workspace/grpo_output
+    --max-completion-length 128 --learning-rate 5e-6 \\
+    --output-dir /workspace/grpo_output
 """
 
 from __future__ import annotations
@@ -204,10 +206,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-dir", default="./outputs/grpo_run")
     p.add_argument("--prompts-per-task", type=int, default=2)
     p.add_argument("--sft-adapter-path", default=None,
-                   help="Path to SFT adapter (loaded as frozen prior); "
-                        "pass 'none' or omit to train from raw base.")
-    p.add_argument("--max-episode-steps", type=int, default=6)
-    p.add_argument("--continuation-temperature", type=float, default=0.7)
+                   help="Path to SFT adapter (loaded as the trainable LoRA so "
+                        "SFT weights are both active during generation and "
+                        "further trained by GRPO); pass 'none' or omit to "
+                        "train from raw base.")
     return p
 
 
@@ -253,36 +255,21 @@ def _extract_sentinel(prompt: str) -> Dict[str, Any]:
 
 # ─── Multi-step rollout reward ────────────────────────────────────────────────
 
-def _generate_continuation_action(model, tokenizer, system_prompt, user_prompt,
-                                   max_new_tokens=128, temperature=0.7):
-    """Generate ONE action string for steps 2..N of an episode rollout."""
-    import torch
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-    prompt_ids = tokenizer.apply_chat_template(
-        messages, tokenize=True, add_generation_prompt=True, return_tensors="pt",
-    ).to(model.device)
-    with torch.no_grad():
-        output = model.generate(
-            prompt_ids, max_new_tokens=max_new_tokens, do_sample=True,
-            temperature=temperature, top_p=0.9,
-            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-        )
-    completion_ids = output[0][prompt_ids.shape[1]:]
-    return tokenizer.decode(completion_ids, skip_special_tokens=True)
+def make_reward_function(env_url):
+    """Single-step reward function.
 
-
-def make_reward_function(env_url, model_ref, tokenizer_ref, system_prompt,
-                          max_episode_steps=6, continuation_temperature=0.7,
-                          continuation_max_tokens=128):
-    """Closure-based multi-step reward: GRPO completion = step 1, model.generate for steps 2..N."""
+    For each (prompt, completion) pair: parse the completion as a
+    PipelineAction, reset the env to the prompt's task/seed, take ONE
+    env.step, and return that step's reward. No model.generate calls
+    inside this closure — that's the structural mismatch that broke
+    every multi-step variant. GRPO sees clean (prompt, completion,
+    reward) triples and learns to maximize the per-step env reward.
+    """
     from devops_pipeline_gym.models import PipelineAction
 
     def reward_function(completions: List[str], prompts: List[str], **_kwargs) -> List[float]:
         rewards: List[float] = []
-        for prompt_text, first_completion in zip(prompts, completions):
+        for prompt_text, completion in zip(prompts, completions):
             meta = _extract_sentinel(prompt_text)
             task, seed = meta["task"], meta["seed"]
             try:
@@ -291,58 +278,23 @@ def make_reward_function(env_url, model_ref, tokenizer_ref, system_prompt,
                     os.environ["DEVOPS_SEED"] = str(6000 + seed)
 
                 try:
-                    action1 = PipelineAction(**parse_completion(first_completion))
+                    action = PipelineAction(**parse_completion(completion))
                 except Exception as e:
-                    logger.warning("step 1 parse failed: %s: %r", type(e).__name__, e)
+                    logger.warning("parse failed: %s: %r", type(e).__name__, e)
                     rewards.append(-1.0)
                     continue
 
                 with _make_sync_client(env_url) as client:
                     client.reset()
                     try:
-                        result = client.step(action1)
+                        result = client.step(action)
                     except Exception as e:
-                        logger.warning("step 1 env error: %s: %r", type(e).__name__, e)
+                        logger.warning("env step error: %s: %r", type(e).__name__, e)
                         rewards.append(-1.0)
                         continue
-                    episode_reward = float(getattr(result, "reward", 0.0) or 0.0)
-                    done = bool(getattr(result, "done", False))
-                    current_obs = getattr(result, "observation", None)
-
-                    step = 1
-                    while not done and step < max_episode_steps:
-                        if current_obs is None:
-                            break
-                        obs_dict = (current_obs.model_dump() if hasattr(current_obs, "model_dump")
-                                    else current_obs if isinstance(current_obs, dict) else {})
-                        if not obs_dict:
-                            break
-                        role = obs_dict.get("current_role") or "sre"
-                        if hasattr(role, "value"):
-                            role = role.value
-                        user = build_prompt(obs_dict, str(role).lower())
-                        try:
-                            cont = _generate_continuation_action(
-                                model_ref, tokenizer_ref, system_prompt, user,
-                                max_new_tokens=continuation_max_tokens,
-                                temperature=continuation_temperature,
-                            )
-                            action_n = PipelineAction(**parse_completion(cont))
-                            step_result = client.step(action_n)
-                            episode_reward += float(getattr(step_result, "reward", 0.0) or 0.0)
-                            done = bool(getattr(step_result, "done", False))
-                            current_obs = getattr(step_result, "observation", None)
-                        except Exception as e:
-                            logger.warning(
-                                "step %d failed: %s: %r",
-                                step + 1, type(e).__name__, e,
-                            )
-                            episode_reward -= 0.1
-                        step += 1
-
-                rewards.append(episode_reward)
+                    rewards.append(float(getattr(result, "reward", 0.0) or 0.0))
             except Exception as e:
-                logger.error("episode failed: %s: %s", type(e).__name__, str(e)[:150])
+                logger.error("episode failed: %s: %r", type(e).__name__, e)
                 rewards.append(-1.0)
         return rewards
 
@@ -435,26 +387,17 @@ def main():
 
     from peft import get_peft_model
     if sft_loaded:
-        # Load SFT adapter, MERGE it into the base (so SFT weights are active
-        # during generation), THEN add a fresh trainable LoRA on top. PEFT
-        # only activates one adapter at a time — stacked-adapter approach
-        # leaves the SFT prior inactive during generation, producing 128-token
-        # garbage that DAPO masks → zero gradient. merge_and_unload bakes the
-        # SFT weights into the base and frees the adapter slot for GRPO.
-        logger.info("Loading SFT adapter and merging into base: %s", args.sft_adapter_path)
+        # Load SFT adapter as THE trainable LoRA. PEFT activates one adapter
+        # at a time, so the SFT weights are both active during generation
+        # AND further trained by GRPO. No merge (lossy on 4-bit base, the
+        # rounding-error warning destroys the SFT prior), no stacking (only
+        # one adapter active during forward, which left fresh-init GRPO LoRA
+        # in the active path producing 128-token garbage).
+        logger.info("Loading SFT adapter as the trainable GRPO LoRA: %s",
+                    args.sft_adapter_path)
         model = PeftModel.from_pretrained(
-            model, args.sft_adapter_path, is_trainable=False,
+            model, args.sft_adapter_path, is_trainable=True,
         )
-        model = model.merge_and_unload()
-        logger.info("SFT weights merged into base. Adding fresh trainable GRPO LoRA.")
-        # merge_and_unload de-quantizes some layers; re-prep for k-bit training
-        # to restore gradient checkpointing + cast to fp32 where needed.
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": False},
-        )
-        model = get_peft_model(model, lora_config)
     else:
         model = get_peft_model(model, lora_config)
         logger.info("Single trainable LoRA on raw base (no SFT prior)")
@@ -473,16 +416,8 @@ def main():
     logger.info("Dataset size: %d prompts", len(prompts))
     dataset = Dataset.from_list(prompts)
 
-    # ── Reward function: closure over model + tokenizer ──────────────────────
-    reward_fn = make_reward_function(
-        env_url=args.env_url,
-        model_ref=model,
-        tokenizer_ref=tokenizer,
-        system_prompt=SYSTEM_PROMPT,
-        max_episode_steps=args.max_episode_steps,
-        continuation_temperature=args.continuation_temperature,
-        continuation_max_tokens=args.max_completion_length,
-    )
+    # ── Reward function: single-step env reward ──────────────────────────────
+    reward_fn = make_reward_function(env_url=args.env_url)
 
     # ── GRPO config (kube-sre-gym pattern + DAPO settings) ──────────────────
     grpo_config = GRPOConfig(
