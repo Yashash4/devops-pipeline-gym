@@ -140,8 +140,9 @@ def _reward_chart(rewards: List[float]) -> Any:
         ax.grid(True, axis="y", alpha=0.3)
         ax.set_title(f"step rewards | total = {sum(rewards):+.3f}")
     else:
-        ax.text(0.5, 0.5, "Click Reset to start an episode",
-                ha="center", va="center", transform=ax.transAxes, color="#94a3b8")
+        ax.text(0.5, 0.5, "Click an action button below to start collecting rewards",
+                ha="center", va="center", transform=ax.transAxes, color="#94a3b8",
+                fontsize=10)
         ax.axis("off")
     fig.tight_layout()
     return fig
