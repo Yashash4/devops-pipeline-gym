@@ -32,8 +32,13 @@ from __future__ import annotations
 # We never use mergekit features (no model merging in our training loop),
 # so a stub that satisfies any attribute access is safe. __getattr__ on the
 # module returns a no-op class for any name.
+#
+# Stubs MUST have a valid __spec__ so importlib.util.find_spec("mergekit")
+# (called by transformers/trl capability checks like _is_package_available)
+# returns a real ModuleSpec instead of raising ValueError on __spec__=None.
 import sys as _sys
 import types as _types
+import importlib.machinery as _ilm
 
 
 class _StubMergekitModule(_types.ModuleType):
@@ -54,7 +59,11 @@ for _mod_name in (
     "mergekit.options",
 ):
     if _mod_name not in _sys.modules:
-        _sys.modules[_mod_name] = _StubMergekitModule(_mod_name)
+        _stub = _StubMergekitModule(_mod_name)
+        _stub.__spec__ = _ilm.ModuleSpec(_mod_name, loader=None)
+        _stub.__file__ = f"<stub:{_mod_name}>"
+        _stub.__path__ = []  # marks as package, allows submodule imports
+        _sys.modules[_mod_name] = _stub
 
 # ────────────────────────────────────────────────────────────────────────────
 
