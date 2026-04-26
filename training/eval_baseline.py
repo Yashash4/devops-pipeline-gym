@@ -259,6 +259,14 @@ def run_episode(client, model_adapter, task: str, seed_offset: int) -> Dict[str,
         rewards.append(r)
         reward_sum += r
         health_per_step.append(_extract_system_health(obs))
+        # Per-step heartbeat so a long episode doesn't look frozen.
+        # flush=True is required because Kaggle/Jupyter output buffering
+        # otherwise hides this until the cell exits.
+        print(
+            f"      step={steps} role={role} "
+            f"action={action.action_type.value} reward={r:+.3f}",
+            flush=True,
+        )
         if result.done:
             done = True
             break
