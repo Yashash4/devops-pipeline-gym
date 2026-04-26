@@ -58,11 +58,49 @@ subprocess.run(["uv", "pip", "install", "-e", ".", "--quiet"], check=True)
 # Step 3: Download SFT adapter to local dir (so PEFT can load it as the trainable LoRA)
 print(f"[3/7] Downloading SFT adapter {SFT_ADAPTER}...", flush=True)
 from huggingface_hub import snapshot_download
-sft_adapter_local = snapshot_download(
+import glob
+sft_adapter_root = snapshot_download(
     repo_id=SFT_ADAPTER,
     local_dir="/workspace/sft_adapter",
 )
-print(f"    SFT adapter ready at: {sft_adapter_local}", flush=True)
+print(f"    SFT adapter downloaded to: {sft_adapter_root}", flush=True)
+
+# adapter_config.json may be at root, in final/, or in checkpoint-N/.
+# Find it and use that directory as the actual adapter path.
+sft_adapter_local = None
+candidates = [sft_adapter_root, os.path.join(sft_adapter_root, "final")]
+# Also any checkpoint-N dirs (try highest N first)
+checkpoints = sorted(
+    glob.glob(os.path.join(sft_adapter_root, "checkpoint-*")),
+    key=lambda p: int(p.rsplit("-", 1)[-1]) if p.rsplit("-", 1)[-1].isdigit() else 0,
+    reverse=True,
+)
+candidates.extend(checkpoints)
+
+for candidate in candidates:
+    if os.path.exists(os.path.join(candidate, "adapter_config.json")):
+        sft_adapter_local = candidate
+        print(f"    Using adapter at: {sft_adapter_local}", flush=True)
+        break
+
+if sft_adapter_local is None:
+    # Last resort: recursive glob
+    matches = glob.glob(
+        os.path.join(sft_adapter_root, "**", "adapter_config.json"),
+        recursive=True,
+    )
+    if matches:
+        sft_adapter_local = os.path.dirname(matches[0])
+        print(f"    Found adapter via recursive glob: {sft_adapter_local}", flush=True)
+    else:
+        # Show what was downloaded for debugging
+        print("    Files in sft_adapter_root:", flush=True)
+        for root, dirs, files in os.walk(sft_adapter_root):
+            for f in files[:50]:
+                print(f"      {os.path.join(root, f)}", flush=True)
+        raise RuntimeError(
+            f"No adapter_config.json found in {sft_adapter_root} or any subdir"
+        )
 
 # Step 4: Boot env-server
 print("[4/7] Booting env-server on localhost:8000...", flush=True)
@@ -101,7 +139,7 @@ if not health_ok:
 
 try:
     # Step 5: GRPO with denser config
-    print("[5/7] GRPO RETRY: 300 steps from SFT adapter, num_gen=16, max_comp_len=512", flush=True)
+    print("[5/7] GRPO RETRY: 200 steps from SFT adapter, num_gen=16, max_comp_len=512", flush=True)
     print("    Hypothesis: more samples + longer completions + SFT prior -> reward signal escapes the flat-band trap", flush=True)
     subprocess.run(
         [
@@ -109,7 +147,7 @@ try:
             "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
             "--env-url", "http://localhost:8000",
             "--sft-adapter-path", sft_adapter_local,
-            "--max-steps", "300",
+            "--max-steps", "200",
             "--batch-size", "1",
             "--grad-accum", "4",
             "--num-generations", "16",
