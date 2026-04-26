@@ -1,24 +1,26 @@
 """DevOps Pipeline Gym — Gradio "play as the on-call engineer" demo.
 
-Standalone version: pure httpx + gradio, no openenv-core dependency,
-to sidestep the websockets dep conflict between gradio-client (<13)
-and openenv-core (>=15).
-
-Calls the env Space directly via HTTP POST /reset and POST /step.
+WebSocket version: talks to the env Space via openenv's WebSocket protocol
+(JSON messages of shape {"type": "reset|step", "data": {...}}). Uses the
+sync API of the `websockets` package so we don't need to invade Gradio's
+event loop.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import traceback
 from typing import Any, Dict, List, Optional
 
 import gradio as gr
-import httpx
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# websockets sync client (works with gradio-client 2.x; we pin both in requirements.txt)
+from websockets.sync.client import connect as ws_connect
 
 DEFAULT_ENV_URL = os.environ.get(
     "ENV_URL", "https://yashash045-devops-pipeline-gym.hf.space"
@@ -42,48 +44,83 @@ TASKS = [
 MIGRATIONS = ["001_init_schema", "002_add_indexes", "003_backfill_users"]
 
 
+def _to_ws_url(env_url: str) -> str:
+    """Convert https://...hf.space → wss://...hf.space/ws."""
+    url = env_url.rstrip("/")
+    if url.startswith("https://"):
+        url = "wss://" + url[len("https://"):]
+    elif url.startswith("http://"):
+        url = "ws://" + url[len("http://"):]
+    return url + "/ws"
+
+
 # --- Session ---------------------------------------------------------------
 
 class Session:
-    """Per-user session: holds an httpx client and the live observation."""
+    """Per-user WebSocket session to the env Space.
+
+    openenv-core uses WebSocket as its sticky-session protocol, so plain
+    HTTP /step returns 500 on the env Space (no episode state across HTTP
+    requests). We open a long-lived WebSocket here, one per user, kept in
+    gr.State so it survives across button clicks.
+    """
 
     def __init__(self, env_url: str = DEFAULT_ENV_URL):
         self.env_url = env_url.rstrip("/")
-        self.client: Optional[httpx.Client] = None
+        self.ws = None  # websockets.sync.client.ClientConnection
         self.observation: Dict[str, Any] = {}
         self.rewards: List[float] = []
         self.step_log: List[str] = []
 
-    def _ensure_client(self):
-        if self.client is None:
-            self.client = httpx.Client(base_url=self.env_url, timeout=60.0)
+    def _ensure_ws(self):
+        if self.ws is None:
+            self.ws = ws_connect(
+                _to_ws_url(self.env_url),
+                max_size=100 * 1024 * 1024,
+                open_timeout=20,
+            )
+
+    def _send_recv(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        self._ensure_ws()
+        self.ws.send(json.dumps(message))
+        raw = self.ws.recv(timeout=60)
+        return json.loads(raw)
 
     def reset(self, task: str) -> Dict[str, Any]:
-        self._ensure_client()
-        body = {"task": task} if task else {}
-        r = self.client.post("/reset", json=body)
-        r.raise_for_status()
-        data = r.json()
-        self.observation = data.get("observation", data)
+        # openenv reset: kwargs become reset() params. We pass task so env can
+        # use it (server-side reset reads DEVOPS_TASK env var, which we can't
+        # set from here, but newer openenv builds honor data.task too).
+        msg = {"type": "reset", "data": {"task": task} if task else {}}
+        resp = self._send_recv(msg)
+        if resp.get("type") == "error":
+            err = resp.get("data", {}).get("message", "unknown")
+            raise RuntimeError(f"env error on reset: {err}")
+        data = resp.get("data", {})
+        self.observation = data.get("observation", {})
         self.rewards = []
         self.step_log = [f"[reset] task={task}"]
         return self.observation
 
     def step(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        self._ensure_client()
-        # Try wrapped form first; fall back to top-level if 422
+        msg = {"type": "step", "data": action}
         try:
-            r = self.client.post("/step", json={"action": action})
-            if r.status_code == 422:
-                r = self.client.post("/step", json=action)
-            r.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            self.step_log.append(
-                f"[error] {e.response.status_code}: {e.response.text[:200]}"
-            )
+            resp = self._send_recv(msg)
+        except Exception as e:
+            self.step_log.append(f"[ws error] {type(e).__name__}: {str(e)[:120]}")
+            # Reconnect on any error
+            try:
+                self.ws.close()
+            except Exception:
+                pass
+            self.ws = None
             return {"observation": self.observation, "reward": 0.0, "done": False}
 
-        data = r.json()
+        if resp.get("type") == "error":
+            err = resp.get("data", {}).get("message", "unknown")
+            self.step_log.append(f"[env error] {err[:120]}")
+            return {"observation": self.observation, "reward": 0.0, "done": False}
+
+        data = resp.get("data", {})
         self.observation = data.get("observation", self.observation)
         reward = float(data.get("reward", 0.0) or 0.0)
         done = bool(data.get("done", False))
@@ -187,7 +224,7 @@ def build_ui():
                 label="Env URL",
                 value=DEFAULT_ENV_URL,
                 scale=3,
-                info="Connects to the env Space via HTTP",
+                info="Connects to the env Space via WebSocket",
             )
             task_dd = gr.Dropdown(
                 choices=TASKS,
@@ -233,7 +270,7 @@ def build_ui():
             cfg_key = gr.Textbox(label="Config key (edit_config)", value="max_connections")
             cfg_val = gr.Textbox(label="Config value (edit_config)", value="100")
             mig_name = gr.Textbox(label="Migration name", value="001_init_schema")
-            mig_type = gr.Dropdown(choices=["schema", "data", "rollback"],
+            mig_type = gr.Dropdown(choices=["schema", "data", "rollback_migration"],
                                     value="schema", label="Migration type")
 
         with gr.Accordion("🔵 DEV actions", open=True):
@@ -260,6 +297,9 @@ def build_ui():
         def do_reset(sess: Session, env_url_val: str, task: str):
             try:
                 if sess is None or sess.env_url != env_url_val.rstrip("/"):
+                    if sess and sess.ws:
+                        try: sess.ws.close()
+                        except: pass
                     sess = Session(env_url_val)
                 obs = sess.reset(task)
                 return (
@@ -274,14 +314,14 @@ def build_ui():
                     [],
                     _reward_chart([]),
                     f"[reset error] {type(e).__name__}: {e}",
-                    f"❌ Reset failed: {type(e).__name__}\n```\n{tb[-500:]}\n```",
+                    f"❌ Reset failed: {type(e).__name__}\n```\n{tb[-400:]}\n```",
                 )
 
         def do_action(sess: Session, action_type: str, role: str,
                       service_name: str, target_version: str,
                       cfg_k: str, cfg_v: str,
                       mig_n: str, mig_t: str):
-            if sess is None or sess.client is None:
+            if sess is None or sess.ws is None:
                 return (
                     [],
                     _reward_chart([]),
@@ -314,7 +354,7 @@ def build_ui():
                     _services_to_rows(sess.observation),
                     _reward_chart(sess.rewards),
                     "\n".join(sess.step_log),
-                    f"❌ Action failed: {type(e).__name__}\n```\n{tb[-500:]}\n```",
+                    f"❌ Action failed: {type(e).__name__}\n```\n{tb[-400:]}\n```",
                 )
 
         reset_btn.click(do_reset, [sess_state, env_url, task_dd], outs)
