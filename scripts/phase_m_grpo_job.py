@@ -2,12 +2,18 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "torch>=2.4",
-#     "unsloth",
+#     # Drop unsloth — we're on the kube-sre-gym pattern now (pure HF +
+#     # SDPA + PEFT). Unsloth's xformers attention has no backward kernel
+#     # for Qwen3's 5D BMGHK shape (proven in proof v4 run).
 #     # NO vllm pin — we're not using vLLM (proof-run path), and TRL 0.29
 #     # requires vllm==0.10.2 specifically (cannot import GuidedDecodingParams
 #     # from newer vllm). Letting UV pull only what TRL needs OR letting
 #     # vllm be absent (TRL has try/except for that case).
 #     "trl>=0.12",
+#     # mergekit: TRL 0.29 trainer/callbacks.py unconditionally imports
+#     # mergekit_utils which top-level imports mergekit. Without it
+#     # GRPOTrainer fails to import. Adding the dep makes TRL importable.
+#     "mergekit",
 #     "peft>=0.18.0,<0.19",
 #     "datasets>=3.0",
 #     "bitsandbytes>=0.43",
