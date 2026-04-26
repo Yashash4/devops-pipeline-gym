@@ -22,7 +22,7 @@ tags:
 
 **Quick re-run for judges:** open the Colab badge above → set `HF_TOKEN` in Secrets → run all cells. ~15 min on free T4. Loads our trained adapter, runs baseline + trained on the same seed, shows the delta.
 
-**Trained adapter:** [yashash045/devops-pipeline-gym-trained](https://huggingface.co/yashash045/devops-pipeline-gym-trained) · **SFT warmup:** [yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter) · **Track-IO:** [yashash045/dpg-trackio](https://huggingface.co/spaces/yashash045/dpg-trackio)
+**Trained adapter (hero, +3.225 delta):** [yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter) · **GRPO RL refinement (exploratory):** [yashash045/devops-pipeline-gym-trained](https://huggingface.co/yashash045/devops-pipeline-gym-trained) · **Track-IO:** [yashash045/dpg-trackio](https://huggingface.co/spaces/yashash045/dpg-trackio)
 
 ---
 
@@ -110,17 +110,30 @@ Plus structural penalties: broken-healthy `−0.30`, repeated investigation `−
 
 ## Results
 
-*Filled in after Saturday training. Anchor: untrained Qwen3-1.7B-bnb-4bit vs the same model after SFT (78 trajectories) + GRPO (200 steps).*
+We trained Qwen3-1.7B-bnb-4bit on 30 expert trajectories via SFT, then explored RL refinement via GRPO. The SFT-only adapter is the headline result; GRPO is shipped as supporting evidence that the training pipeline is end-to-end functional.
 
-Pitch metrics targeted:
+### Headline: SFT delta on `judgment_call` (seed 3003)
 
-| Metric | Untrained | Trained (target) |
-|---|---|---|
-| Avg reward (`judgment_call`) | 0.18 | 0.42 |
-| Steps to recovery (`cascading_failure`) | 14 | 6 |
-| Success rate (across 6 tasks) | 22% | 58% |
+| Configuration | Total reward | Delta |
+|---|---:|---:|
+| Untrained Qwen3-1.7B-bnb-4bit | **−1.070** | — |
+| **+ SFT LoRA** ([yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter)) | **+2.155** | **+3.225** |
 
-`training/eval_baseline.py` records `avg_steps_to_recovery` per task (Phase J.5 metric). `training/generate_comparison_chart.py` produces a side-by-side reward + recovery PNG. `training/export_replay.py` + `training/render_replay.py` produce per-step PNG frames for the before/after demo video.
+Baseline scored on the same env, same seed, same prompt format. SFT was 2 epochs on 30 trajectories (~30 min on T4), 17M trainable params (1.69% of base), QLoRA r=16 α=32 across all attn + MLP modules per Daniel-Unsloth-recommended settings.
+
+Reproduce in [`kaggle_eval.ipynb`](kaggle_eval.ipynb) — opens on Kaggle T4, 12 min, prints the same delta.
+
+### GRPO refinement (exploratory)
+
+We ran 30 GRPO steps from raw base on L40S to validate the RL pipeline. Reward stayed flat (~0.04 mean) but loss/grad_norm/KL all flowed (`final_loss=8.1e−6`, `final_KL=0.0012`), confirming the training infrastructure works end-to-end. The trained adapter is shipped at [yashash045/devops-pipeline-gym-trained](https://huggingface.co/yashash045/devops-pipeline-gym-trained); training curves below.
+
+![GRPO reward + loss curves](outputs/grpo_run1/reward_curve.png)
+
+Track-IO logs (loss, reward, KL, entropy, grad_norm per step): [yashash045/dpg-trackio](https://huggingface.co/spaces/yashash045/dpg-trackio).
+
+### Tooling
+
+`training/eval_baseline.py` records `avg_steps_to_recovery` per task (Phase J.5 metric). `training/generate_comparison_chart.py` produces a side-by-side reward + recovery PNG. `training/plot_grpo_curve.py` plots the GRPO trainer state. `training/export_replay.py` + `training/render_replay.py` produce per-step PNG frames for the before/after demo video.
 
 ## Reproduce It Yourself
 
