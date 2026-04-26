@@ -498,11 +498,36 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "final").mkdir(parents=True, exist_ok=True)
 
+    # Read NO_UNSLOTH BEFORE any unsloth import — importing unsloth triggers
+    # its monkey-patching of TRL's GRPOTrainer (creating
+    # unsloth_compiled_cache/UnslothGRPOTrainer.py at runtime), which uses
+    # torch.compile + Unsloth-specific model methods. To bypass that
+    # entirely we must NEVER import unsloth in this run.
+    no_unsloth = os.environ.get("NO_UNSLOTH", "").lower() in ("1", "true", "yes")
+
+    # Disable torch.compile / dynamo when NO_UNSLOTH is set — even if
+    # unsloth_compiled_cache exists from a prior run, dynamo compilation
+    # of Unsloth's chunked log-softmax fails on pure-HF Qwen3 due to
+    # shape-symbol mismatch in the lm_head matmul.
+    if no_unsloth:
+        os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+        os.environ.setdefault("UNSLOTH_DISABLE", "1")
+        # Remove unsloth_compiled_cache from sys.path / pyc cache if present
+        import shutil
+        cache_dir = "/workspace/devops-pipeline-gym/unsloth_compiled_cache"
+        if os.path.isdir(cache_dir):
+            try:
+                shutil.rmtree(cache_dir)
+                logger.info("Removed stale unsloth_compiled_cache to prevent re-import")
+            except Exception as e:
+                logger.warning("Could not remove unsloth_compiled_cache: %s", e)
+
     # Heavy imports here so CPU-only checkers can still import the module.
     try:
         import torch  # noqa: F401
         from datasets import Dataset
-        from unsloth import FastLanguageModel
+        if not no_unsloth:
+            from unsloth import FastLanguageModel  # noqa: F401
         from trl import GRPOConfig, GRPOTrainer
     except ImportError as e:
         logger.error(
@@ -519,7 +544,7 @@ def main():
     except ImportError:
         logger.info("TRL experimental.openenv NOT available; using Option B (closure-based multi-step)")
 
-    no_unsloth = os.environ.get("NO_UNSLOTH", "").lower() in ("1", "true", "yes")
+    logger.info("NO_UNSLOTH=%s (skip unsloth import to avoid GRPOTrainer monkey-patching)", no_unsloth)
     if no_unsloth:
         # Pure HF + PEFT + TRL path (kube-sre-gym 1st place pattern).
         # Avoids Unsloth's xformers attention which has no backward kernel
