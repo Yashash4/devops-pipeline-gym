@@ -583,13 +583,19 @@ def main():
             "(vLLM-compatible single LoRA path)"
         )
 
-    # When --use-vllm is on, switch from Unsloth's "smart" gradient offload
-    # to standard PyTorch checkpointing. Unsloth's smart-offload deadlocks on
-    # vLLM colocate (we kept hanging at "Will smartly offload gradients to
-    # save VRAM!"). kube-sre-gym (sid-rp) uses standard gradient_checkpointing
-    # in the same TRL+vLLM colocate stack and ships cleanly. Costs ~2 GB more
-    # VRAM but avoids the deadlock entirely.
-    grad_ckpt_mode = True if args.use_vllm else "unsloth"
+    # Use standard PyTorch gradient checkpointing instead of Unsloth's
+    # "smart" smart-offload when ANY of: --use-vllm OR SFT adapter loaded.
+    # Smart-offload breaks autograd graph through stacked PEFT adapters
+    # (frozen sft_warmup + trainable default), causing
+    # "RuntimeError: element 0 of tensors does not require grad and does
+    # not have a grad_fn" at first backward(). Standard checkpointing
+    # costs ~2GB more VRAM but autograd works correctly.
+    sft_loaded = bool(args.sft_adapter_path and args.sft_adapter_path.lower() != "none")
+    grad_ckpt_mode = True if (args.use_vllm or sft_loaded) else "unsloth"
+    logger.info(
+        "Gradient checkpointing mode: %s (use_vllm=%s, sft_loaded=%s)",
+        grad_ckpt_mode, args.use_vllm, sft_loaded,
+    )
     try:
         # lora_alpha = 2 * r is Daniel Han (Unsloth) and kube-sre-gym (sid-rp)
         # standard. lora_alpha=16 (1× rank) was a leftover from earlier dry-runs.
@@ -654,6 +660,56 @@ def main():
                 "Trainable params suspiciously high (%.1f%%). LoRA should be <5%%.",
                 pct,
             )
+
+    # Belt-and-suspenders for stacked-adapter setups where Unsloth doesn't
+    # always wire up requires_grad / adapter activation correctly.
+    # 1) train mode (vs inference)
+    # 2) explicitly enable adapter layers (in case enable_adapters was disabled)
+    # 3) forward-pass smoke test — fail FAST if loss has no grad_fn
+    model.train()
+    if hasattr(model, "enable_adapter_layers"):
+        try:
+            model.enable_adapter_layers()
+        except Exception as e:
+            logger.warning("enable_adapter_layers() failed: %s", e)
+
+    # Forward-pass smoke test: catch the "no grad_fn" bug BEFORE trainer.train()
+    # so we crash with a clear message rather than 2 minutes into the loop.
+    try:
+        import torch
+        smoke_input = tokenizer("test", return_tensors="pt").to(model.device)
+        smoke_out = model(**smoke_input, labels=smoke_input["input_ids"])
+        if not getattr(smoke_out.loss, "requires_grad", False) or smoke_out.loss.grad_fn is None:
+            logger.error(
+                "FORWARD SMOKE TEST FAILED: loss has no grad_fn. "
+                "Stacked-adapter autograd is broken. "
+                "requires_grad=%s, grad_fn=%s",
+                getattr(smoke_out.loss, "requires_grad", "?"),
+                smoke_out.loss.grad_fn,
+            )
+            # Try one more rescue: explicitly mark all LoRA "default" params trainable
+            n_fixed = 0
+            for name, param in model.named_parameters():
+                if "lora_" in name and "default" in name:
+                    param.requires_grad = True
+                    n_fixed += 1
+            logger.warning("Forced requires_grad=True on %d LoRA params", n_fixed)
+            # Re-test
+            smoke_out = model(**smoke_input, labels=smoke_input["input_ids"])
+            if smoke_out.loss.grad_fn is None:
+                raise RuntimeError(
+                    "Stacked PEFT autograd broken. Loss has no grad_fn even after "
+                    "manual requires_grad fix. Cannot train. Drop --sft-adapter-path "
+                    "or remove Unsloth wrapping."
+                )
+        logger.info(
+            "Forward smoke test PASSED: loss=%.4f has grad_fn (autograd OK)",
+            float(smoke_out.loss.item()),
+        )
+    except RuntimeError:
+        raise
+    except Exception as e:
+        logger.warning("Forward smoke test inconclusive (%s): proceeding anyway", e)
 
     logger.info("Building dataset from env rollouts (prompts_per_task=%d)", args.prompts_per_task)
     prompts = build_dataset(args.env_url, prompts_per_task=args.prompts_per_task)
