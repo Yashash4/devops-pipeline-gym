@@ -42,7 +42,7 @@ The hero result: **a 1.7B model trained on 80 trajectories outperforms 70B-700B 
 | Llama-3.3-70B-Instruct | 70B | -1.696 | 5.5% |
 | **Qwen3-1.7B + this SFT adapter (single-seed `judgment_call`)** | **1.7B** | **-0.044** | 0% |
 
-The same `judgment_call` task at seed `5003` for our model: untrained Qwen3-1.7B base = `-1.200`, with this SFT adapter = `-0.044`. **+1.156 same-model delta**, and we beat every untrained 70B-700B frontier model in the table above by `+1.16` to `+1.77`.
+On `judgment_call` at seed `5003`, our trained 1.7B (this adapter) gets `-0.044`. The closest-size untrained baseline we ran in the demo notebook is Qwen2.5-7B-Instruct via HF Router: `-1.200`. **+1.156 reward delta — trained 1.7B beats untrained 7B**. We also beat every untrained 70B-700B frontier model in the table above by `+1.16` to `+1.77`.
 
 Frontier models default to either immediate `abort` (DeepSeek, Mistral all return -1.580 across all tasks) or attempted-but-failed action sequences. None succeed at the task without env-specific training. The trained 1.7B knows to investigate first, identify root cause, deploy carefully, and approve only when healthy.
 
