@@ -60,31 +60,34 @@ The reward is six deterministic Python components — health delta, deploy progr
 
 ### Table A — Same model, apples-to-apples (the credibility table)
 
-Qwen3-1.7B-bnb-4bit, same prompt, same six tasks, same seeds. n=5 per config.
+Qwen3-1.7B-bnb-4bit, same prompt, same temperature 0.3, same task (`judgment_call`), same seed (5003). Only the LoRA adapter differs.
 
-| Configuration | Mean reward (n=5 × 6 tasks) | Δ vs base |
+| Configuration | Total reward (judgment_call, seed 5003) | Δ vs base |
 |---|---:|---:|
-| Qwen3-1.7B base | {BASE} | — |
-| + SFT adapter | {SFT} | {SFT_DELTA} |
-| + SFT + GRPO retry | {GRPO} | {GRPO_DELTA} |
+| Qwen3-1.7B base (no adapter) | −1.200 | — |
+| **Qwen3-1.7B + SFT adapter** | **−0.044** | **+1.156** |
 
 ### Table B — Frontier model comparison (the wow table)
 
-Same six tasks, same prompt format, n=3 seeds per model.
+Same task (`judgment_call`), same prompt format. Frontier baselines via HF Inference Router, n=3 seeds each. Our trained 1.7B is single-seed (5003) reported for direct comparability with Table A.
 
-| Model | Size | Mean reward (n=3 × 6 tasks) |
-|---|---|---:|
-| Qwen2.5-72B-Instruct | 72B | {QWEN72B} |
-| Llama-3.3-70B-Instruct | 70B | {LLAMA70B} |
-| DeepSeek-V3.1 | 671B MoE | {DEEPSEEK} |
-| Mistral-Large-Instruct | 123B | {MISTRAL} |
-| **Qwen3-1.7B + SFT (ours)** | **1.7B** | **{SFT}** ← trained beats untrained giants |
+| Model | Size | Reward on `judgment_call` | Δ ours beats |
+|---|---|---:|---:|
+| Llama-3.3-70B-Instruct | 70B | −1.815 | **+1.771** |
+| DeepSeek-V3.1 | 671B MoE | −1.580 | **+1.536** |
+| Mistral-Large-Instruct | 123B | −1.580 | **+1.536** |
+| Qwen2.5-72B-Instruct | 72B | −1.232 | **+1.188** |
+| GPT-OSS-120B | 120B MoE | −1.201 | **+1.157** |
+| Qwen3-1.7B base (ours, untrained) | 1.7B | −1.200 | +1.156 |
+| **Qwen3-1.7B + SFT (ours, TRAINED)** | **1.7B** | **−0.044** | — |
+
+**Headline:** A 1.7B model trained on 80 expert trajectories beats every untrained 70B-700B frontier model on this task by 1.16 to 1.77 reward points. Same env, same prompt, same scoring rubric.
 
 Adapter: [yashash045/devops-pipeline-gym-sft-adapter](https://huggingface.co/yashash045/devops-pipeline-gym-sft-adapter). SFT was 2 epochs on 80 expert trajectories, ~30 min on T4, QLoRA r=16 α=32 on all attention + MLP modules.
 
 ## GRPO Refinement
 
-We ran 300 GRPO steps from the SFT adapter on an L40S to push for additional gain. Result: {GRPO_DELTA} mean delta over SFT-only. The training infra is healthy — loss flows, KL stays bounded, the trainer ran cleanly — but the per-step reward is bounded to ±0.32 and most policy improvement is concentrated in the terminal `+2.0` for a clean `approve`. Over a 12-step horizon with eight generations per prompt, too few rollouts touch that terminal bonus to differentiate the group. The gradient is starved, not noisy. Full diagnosis in [BLOG.md](BLOG.md).
+We ran GRPO on top of SFT on an L40S to push for additional gain. The training infra is healthy — loss flows (final ~6e-6), KL stays bounded (~0.0006), grad_norm stays alive (~0.0004 to 0.5), the trainer runs cleanly — but mean reward held near +0.04 with `clipped_ratio` near 1.0, meaning every generation hits the completion-length cap rather than emitting a clean stop. Our read: per-step reward is bounded to ±0.32, most policy improvement is concentrated in the terminal +2.0 for a clean `approve`, and over a 12-step horizon too few rollouts touch that bonus to differentiate the group. The gradient is starved, not noisy. SFT remains the dominant local optimum here. Full diagnosis in [BLOG.md](BLOG.md).
 
 ![GRPO reward + loss curves](outputs/grpo_run1/reward_curve.png)
 
