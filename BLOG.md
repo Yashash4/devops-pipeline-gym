@@ -12,13 +12,13 @@
 
 ## TL;DR
 
-| | |
-|---|---|
-| **Trained 1.7B reward (judgment_call)** | **−0.044** |
+| Metric | Value |
+|---|---:|
+| **Trained 1.7B reward (`judgment_call`)** | **−0.044** |
 | Untrained 7B baseline | −1.200 |
 | Untrained 70B–671B frontier ceiling | −1.201 to −1.815 |
-| **Delta vs. 7B** | **+1.156** |
-| **Delta vs. frontier** | **+1.16 to +1.77** |
+| **Δ vs. 7B same-family baseline** | **+1.156** |
+| **Δ vs. 70B–671B frontier ceiling** | **+1.16 to +1.77** |
 | Training cost | $0 (free Kaggle T4, ~30 min) |
 | Trajectories used | 80 |
 | Reward loop | Pure Python — **no LLM judge** |
@@ -113,7 +113,7 @@ Two stages. **Stage one — supervised fine-tuning on 80 expert trajectories, ab
 
 ### SFT setup
 
-| | |
+| Setting | Value |
 |---|---|
 | Base model | `unsloth/Qwen3-1.7B-bnb-4bit` |
 | Quantisation | 4-bit NF4 (bitsandbytes) |
