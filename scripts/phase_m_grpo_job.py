@@ -62,30 +62,13 @@ subprocess.run(
     check=True,
 )
 
-# Step 3: Pull SFT adapter from Hub.
-# We dropped this in Option 3 because vLLM colocate hates stacked LoRAs
-# (load_lora AttributeError on Unsloth's wrapper). But the proof-run path
-# is non-vLLM (--use-vllm absent), so the stacked-LoRA conflict is gone.
-# Restoring SFT warm-start: untrained base scored -1.07; SFT alone scored
-# +2.155. GRPO from SFT prior is dramatically more likely to converge
-# than GRPO from chaos (FAQ #16: "RL is improvement, not magic from scratch").
-print("[3/7] Pulling SFT adapter from Hub (warm-start for GRPO)...", flush=True)
-from huggingface_hub import snapshot_download
-
-sft_path = snapshot_download(
-    "yashash045/devops-pipeline-gym-sft-adapter",
-    token=os.environ["HF_TOKEN"],
-    local_dir="/workspace/sft_adapter",
-)
-adapter_config = os.path.join(sft_path, "final", "adapter_config.json")
-if not os.path.exists(adapter_config):
-    print(f"ERROR: adapter_config.json not found at {adapter_config}", flush=True)
-    print(f"Contents of {sft_path}:", flush=True)
-    for root, dirs, files in os.walk(sft_path):
-        for f in files[:20]:
-            print(f"  {os.path.join(root, f)}", flush=True)
-    raise FileNotFoundError(f"adapter_config.json missing at {adapter_config}")
-print(f"    [OK] SFT adapter at {sft_path}/final", flush=True)
+# Step 3: SKIPPED — GRPO trains from raw base.
+# Previous SFT-warmed run hit zero reward variance: every generation
+# parsed to the same action (SFT distribution too converged) -> GRPO
+# advantage = 0 -> no gradient. Raw base has high entropy and no
+# converged policy, so generations diversify on actions -> real reward
+# variance for GRPO to learn from.
+print("[3/7] SKIPPED — training GRPO from raw base (no SFT warm-start)", flush=True)
 
 # Step 4: Boot env-server in background
 print("[4/7] Booting env-server on localhost:8000...", flush=True)
@@ -159,20 +142,24 @@ if not health_ok:
     raise RuntimeError(f"env-server failed to come up in 105s")
 
 try:
-    # Step 5: Run GRPO training (PROOF-RUN v2 — SFT warm-start + tight rollout)
-    print("[5/7] PROOF RUN v3: 20 steps single-step GRPO from SFT-as-trainable-LoRA", flush=True)
-    print(f"    SFT warm-start: {sft_path}/final (already scored +2.155 on judgment_call)", flush=True)
+    # Step 5: Run GRPO training — GRPO from RAW BASE (no SFT prior).
+    # SFT-warmed run hit zero reward variance: SFT distribution was too
+    # converged, every generation parsed to the same action -> std=0 ->
+    # advantage=0 -> no gradient. Raw base has high entropy + no policy
+    # convergence, so different generations produce different actions
+    # -> real variance for GRPO advantage signal.
+    print("[5/7] PROOF RUN v4: 30 steps GRPO from RAW BASE (no SFT prior)", flush=True)
+    print("    Hypothesis: high-entropy base -> action diversity -> reward variance -> learning.", flush=True)
     print("    Single-step rollout: GRPO completion -> parse -> env.step -> reward.", flush=True)
     subprocess.run(
         [
             sys.executable, "training/grpo_train.py",
             "--model", "unsloth/Qwen3-1.7B-bnb-4bit",
-            "--sft-adapter-path", f"{sft_path}/final",
             "--env-url", "http://localhost:8000",
-            "--max-steps", "20",
+            "--max-steps", "30",
             "--batch-size", "1",
             "--grad-accum", "4",
-            "--num-generations", "2",
+            "--num-generations", "4",
             "--prompts-per-task", "2",
             "--learning-rate", "5e-6",
             "--max-completion-length", "256",
