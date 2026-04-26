@@ -62,12 +62,28 @@ def boot_env_server(port: int = 8000, timeout_s: int = 105):
     raise RuntimeError(f"env-server failed health check in {timeout_s}s")
 
 
+def _ensure_kaggle_deps():
+    """Upgrade bitsandbytes on Kaggle (default image ships <0.46 which can't 4-bit
+    quantize Qwen3 models with the API our eval_baseline.py uses).
+    Idempotent — safe to call multiple times. Costs ~10s on first call."""
+    print("[deps] Upgrading bitsandbytes>=0.46.1 (Kaggle ships an older version)...",
+          flush=True)
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q", "-U",
+         "bitsandbytes>=0.46.1"],
+        check=False,  # don't crash the whole eval if pip flakes; bnb may already be new enough
+    )
+
+
 def run_eval(mode: str = "base", n_seeds: int = 5, temperature: float = 0.3,
              upload_to_hub: bool = True):
     """Run multi-seed eval on T4. Saves to /kaggle/working/eval_<mode>.json."""
 
     assert mode in ("base", "sft", "grpo"), f"mode must be base/sft/grpo, got {mode}"
     print(f"=== Eval mode={mode} n_seeds={n_seeds} temp={temperature} ===", flush=True)
+
+    # 0. Ensure bnb >= 0.46 (Kaggle image fix)
+    _ensure_kaggle_deps()
 
     adapters = {
         "base": None,
