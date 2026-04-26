@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "torch>=2.4",
-#     # Drop unsloth — we're on the kube-sre-gym pattern now (pure HF +
+#     # Drop unsloth — we're on the pure HF + PEFT pattern now (HF +
 #     # SDPA + PEFT). Unsloth's xformers attention has no backward kernel
 #     # for Qwen3's 5D BMGHK shape (proven in proof v4 run).
 #     # NO vllm pin — we're not using vLLM (proof-run path), and TRL 0.29
@@ -174,14 +174,14 @@ try:
             # Drop Unsloth wrapping — Unsloth's xformers attention has no
             # backward kernel for Qwen3's 5D BMGHK shape (proven in proof
             # v4 run). Use pure HF Transformers + BitsAndBytesConfig + PEFT.
-            # kube-sre-gym (1st place) used this exact stack.
+            # Stock HF + PEFT + bnb — no Unsloth wrapping needed.
             "NO_UNSLOTH": "1",
             # Drop VLLM_LOGGING_LEVEL=DEBUG — logs are now clean enough
             # without the per-batch profile spam.
-            # kube-sre-gym (sid-rp): "critical for TRL+vLLM colocate" — lets
-            # PyTorch reuse fragmented GPU memory between trainer state and
-            # vLLM serving cache. Even with A100 80GB, keeping this on
-            # is harmless and matches kube-sre-gym's working H100 config.
+            # PyTorch fragmented-memory reuse: critical for TRL+vLLM colocate.
+            # Lets PyTorch reuse fragmented GPU memory between trainer state
+            # and vLLM serving cache. Even with A100 80GB, keeping this on
+            # is harmless and a known-good H100 config.
             "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
             "TRL_EXPERIMENTAL_SILENCE": "1",
         },

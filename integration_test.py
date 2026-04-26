@@ -808,18 +808,18 @@ report("test_round1_regression_still_passes: env still boots after curriculum ad
 
 
 # ============================================================================
-# TEST 14: Round 2 Phase 3 — REMOVED in v2 cleanup
+# TEST 14: Round 2 Phase 3 — REMOVED
 # ============================================================================
-# Ollama client + Adversarial designer test block removed in Phase H —
-# both modules were cut in Phase A (kube-sre-gym overlap / DQ risk).
+# Ollama client + Adversarial designer test block removed during slim-down —
+# the adversarial-designer / LLM-judge path is not part of the shipped env.
 
 
 
 # ============================================================================
-# TEST 15: Round 2 Phase 4 — REMOVED in v2 cleanup
+# TEST 15: Round 2 Phase 4 — REMOVED
 # ============================================================================
-# Hand-off metrics test block removed in Phase H — handoff_metrics module
-# was cut in Phase A (kube-sre-gym overlap / DQ risk).
+# Hand-off metrics test block removed during slim-down — the handoff_metrics
+# module is not part of the shipped env.
 
 
 # ============================================================================
@@ -952,16 +952,15 @@ report("Round 1 optimal score reproducible after Phase 5 (clean_deploy)",
 
 
 # ============================================================================
-# TEST 17: Round 2 Phase 5.7 — REMOVED in v2 cleanup
+# TEST 17: Round 2 Phase 5.7 — REMOVED
 # ============================================================================
-# Adversarial scenario wiring test block removed in Phase H — the
+# Adversarial scenario wiring test block removed during slim-down — the
 # adversarial designer + _load_adversarial_scenario / _adversarial_seed
-# methods + _designer / _last_adversarial_scenario state were all cut in
-# Phases A and D (kube-sre-gym overlap / DQ risk). The curriculum's
-# "adversarial" plateau-signal is now routed by pipeline_environment.reset()
-# straight to random_incident at seed 85; that fallback is exercised
-# implicitly by the curriculum-pick-task tests in TEST 13 and the
-# environment-integration tests in TEST 16.
+# methods + _designer / _last_adversarial_scenario state were all cut.
+# The curriculum's "adversarial" plateau-signal is now routed by
+# pipeline_environment.reset() straight to random_incident at seed 85;
+# that fallback is exercised implicitly by the curriculum-pick-task tests
+# in TEST 13 and the environment-integration tests in TEST 16.
 
 
 # ============================================================================

@@ -1,4 +1,4 @@
-"""GRPO training for DevOps Pipeline Gym (clean single-step kube-sre-gym pattern).
+"""GRPO training for DevOps Pipeline Gym (clean single-step rollout pattern).
 
 Pure HF Transformers + PEFT + TRL. No Unsloth, no vLLM, no multi-step
 rollout inside the reward function (calling model.generate during a
@@ -333,7 +333,7 @@ def poll_curriculum_progress(env_url: str, output_path: Path, step: int) -> None
         print(f"[curriculum_poll] step={step} failed: {type(e).__name__}: {e}", flush=True)
 
 
-# ─── Main: clean kube-sre-gym pattern ─────────────────────────────────────────
+# ─── Main: clean single-step rollout pattern ─────────────────────────────────
 
 def main():
     logging.basicConfig(
@@ -428,7 +428,7 @@ def main():
     # ── Reward function: single-step env reward ──────────────────────────────
     reward_fn = make_reward_function(env_url=args.env_url)
 
-    # ── GRPO config (kube-sre-gym pattern + DAPO settings) ──────────────────
+    # ── GRPO config (single-step pattern + DAPO settings) ───────────────────
     grpo_config = GRPOConfig(
         output_dir=str(out_dir),
         num_generations=args.num_generations,

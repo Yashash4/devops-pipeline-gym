@@ -29,10 +29,10 @@ graders / rewards. Integration happens in Phase 5.
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-# Deterministic per-task seed offsets within each tier. Required because
-# CLAUDE.md forbids hash() for seeding (Python's hash() is randomized per
-# process, breaking reproducibility). Offsets must stay within [0, 39] so
-# medium seeds land in [20, 60) and hard seeds in [60, 100).
+# Deterministic per-task seed offsets within each tier. We avoid Python's
+# built-in hash() for seeding because it is randomized per process, which
+# would break reproducibility. Offsets must stay within [0, 39] so medium
+# seeds land in [20, 60) and hard seeds in [60, 100).
 _TASK_SEED_OFFSET: Dict[str, int] = {
     "clean_deploy": 0,
     "broken_pipeline": 5,

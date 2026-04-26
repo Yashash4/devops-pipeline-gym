@@ -111,8 +111,7 @@ class PipelineEnvironment(Environment):
         else:
             # Round 2 — curriculum picks task based on per-task / per-failure mastery.
             # If the curriculum returns "adversarial" (its plateau signal),
-            # we route to random_incident at a hard-tier seed instead — the
-            # adversarial-designer path was cut for kube-sre-gym overlap.
+            # we route to random_incident at a hard-tier seed instead.
             picked_task, seed_hint = self._curriculum.pick_task()
             if picked_task == "adversarial":
                 self._task_name = "random_incident"

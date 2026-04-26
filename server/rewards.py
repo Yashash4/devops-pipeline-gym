@@ -106,8 +106,7 @@ def calculate_reward(prev_snapshot, current_snapshot, action, viewed_actions,
 
 # ─── Round 2 additions ─────────────────────────────────────────────────────
 #
-# Single signal added on top of the Round 1 base reward (handoff_quality
-# and role_specialization were cut for kube-sre-gym overlap risk).
+# Single signal added on top of the Round 1 base reward.
 # Returns a DELTA; pipeline_environment.step() sums it onto the Round 1
 # base and applies the per-step bound [-0.40, +0.32].
 #

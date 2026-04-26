@@ -1,0 +1,5 @@
+# Extra deps for the standalone Gradio demo (gradio_app.py).
+# NOT installed in the env Space image — keeps the graded artifact lean.
+# Install with: pip install -r requirements.txt -r requirements-demo.txt
+gradio>=4.0
+matplotlib>=3.8
