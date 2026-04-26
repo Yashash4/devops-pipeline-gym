@@ -175,7 +175,7 @@ try:
             "--num-generations", "2",
             "--prompts-per-task", "2",
             "--learning-rate", "5e-6",
-            "--max-completion-length", "128",
+            "--max-completion-length", "256",
             "--output-dir", "/workspace/grpo_output",
         ],
         check=True,

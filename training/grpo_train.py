@@ -440,7 +440,14 @@ def main():
         gradient_checkpointing_kwargs={"use_reentrant": False},
         temperature=1.0,
         loss_type="dapo",
-        mask_truncated_completions=True,
+        # mask_truncated_completions=False: SFT was trained on JSON-only
+        # trajectories (no EOS marker), so the model produces valid actions
+        # but can't stop, padding to max_completion_length. With masking
+        # enabled, every clipped completion is dropped from the loss
+        # (loss=0, grad_norm=0). The completions DO contain parseable
+        # actions and the per-step env reward differentiates them — we
+        # need gradient to flow on those rewards.
+        mask_truncated_completions=False,
     )
 
     # ── Curriculum + reward CSV callbacks ───────────────────────────────────
